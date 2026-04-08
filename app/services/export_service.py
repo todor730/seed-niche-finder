@@ -9,7 +9,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pandas as pd
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from app.api.dependencies import CurrentUser
@@ -109,7 +109,9 @@ class ExportService:
                     select(Export).where(Export.run_id == run_id).order_by(Export.created_at.desc()).limit(limit).offset(offset)
                 )
             )
-            total = len(list(session.scalars(select(Export).where(Export.run_id == run_id))))
+            total = int(
+                session.scalar(select(func.count()).select_from(Export).where(Export.run_id == run_id)) or 0
+            )
             return ListResult(items=[to_export_resource(export) for export in exports], total=total, limit=limit, offset=offset)
 
     def get_export(self, *, current_user: CurrentUser, export_id: UUID):

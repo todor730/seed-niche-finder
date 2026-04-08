@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Generic, TypeVar
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentUser
@@ -67,27 +67,68 @@ def ensure_user(session: Session, current_user: CurrentUser) -> User:
 
 def build_summary(session: Session, run_id: UUID) -> ResearchRunSummary:
     """Build run-level summary counts from persisted records."""
-    keyword_count = session.scalar(
-        select(func.count()).select_from(KeywordCandidate).where(KeywordCandidate.run_id == run_id)
-    ) or 0
-    accepted_keyword_count = session.scalar(
-        select(func.count()).select_from(KeywordCandidate).where(
-            KeywordCandidate.run_id == run_id,
-            KeywordCandidate.status == KeywordCandidateStatus.ACCEPTED,
+    return build_summaries(session, [run_id]).get(run_id, ResearchRunSummary())
+
+
+def build_summaries(session: Session, run_ids: list[UUID]) -> dict[UUID, ResearchRunSummary]:
+    """Build run-level summary counts for many runs with aggregate queries."""
+    if not run_ids:
+        return {}
+
+    keyword_rows = session.execute(
+        select(
+            KeywordCandidate.run_id,
+            func.count(KeywordCandidate.id).label("keyword_count"),
+            func.coalesce(
+                func.sum(case((KeywordCandidate.status == KeywordCandidateStatus.ACCEPTED, 1), else_=0)),
+                0,
+            ).label("accepted_keyword_count"),
         )
-    ) or 0
-    opportunity_count = session.scalar(
-        select(func.count()).select_from(Opportunity).where(Opportunity.run_id == run_id)
-    ) or 0
-    export_count = session.scalar(
-        select(func.count()).select_from(Export).where(Export.run_id == run_id)
-    ) or 0
-    return ResearchRunSummary(
-        keyword_count=keyword_count,
-        accepted_keyword_count=accepted_keyword_count,
-        opportunity_count=opportunity_count,
-        export_count=export_count,
-    )
+        .where(KeywordCandidate.run_id.in_(run_ids))
+        .group_by(KeywordCandidate.run_id)
+    ).all()
+    opportunity_rows = session.execute(
+        select(
+            Opportunity.run_id,
+            func.count(Opportunity.id).label("opportunity_count"),
+        )
+        .where(Opportunity.run_id.in_(run_ids))
+        .group_by(Opportunity.run_id)
+    ).all()
+    export_rows = session.execute(
+        select(
+            Export.run_id,
+            func.count(Export.id).label("export_count"),
+        )
+        .where(Export.run_id.in_(run_ids))
+        .group_by(Export.run_id)
+    ).all()
+
+    summaries = {run_id: ResearchRunSummary() for run_id in run_ids}
+    for row in keyword_rows:
+        summaries[row.run_id] = ResearchRunSummary(
+            keyword_count=int(row.keyword_count or 0),
+            accepted_keyword_count=int(row.accepted_keyword_count or 0),
+            opportunity_count=summaries[row.run_id].opportunity_count,
+            export_count=summaries[row.run_id].export_count,
+        )
+    for row in opportunity_rows:
+        summary = summaries[row.run_id]
+        summaries[row.run_id] = ResearchRunSummary(
+            keyword_count=summary.keyword_count,
+            accepted_keyword_count=summary.accepted_keyword_count,
+            opportunity_count=int(row.opportunity_count or 0),
+            export_count=summary.export_count,
+        )
+    for row in export_rows:
+        summary = summaries[row.run_id]
+        summaries[row.run_id] = ResearchRunSummary(
+            keyword_count=summary.keyword_count,
+            accepted_keyword_count=summary.accepted_keyword_count,
+            opportunity_count=summary.opportunity_count,
+            export_count=int(row.export_count or 0),
+        )
+    return summaries
 
 
 def build_progress(run: ResearchRun, summary: ResearchRunSummary) -> ResearchProgress:
@@ -163,6 +204,14 @@ def to_research_run_list_item(session: Session, run: ResearchRun) -> ResearchRun
     return ResearchRunListItem(
         **to_research_run(run).model_dump(),
         summary=build_summary(session, run.id),
+    )
+
+
+def to_research_run_list_item_with_summary(run: ResearchRun, summary: ResearchRunSummary) -> ResearchRunListItem:
+    """Map a research run ORM record to the list-item API schema with a precomputed summary."""
+    return ResearchRunListItem(
+        **to_research_run(run).model_dump(),
+        summary=summary,
     )
 
 

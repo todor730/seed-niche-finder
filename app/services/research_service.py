@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 import logging
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.dependencies import CurrentUser
@@ -35,7 +35,7 @@ from app.db.repositories.source_queries import SourceQueryRepository
 from app.db.repositories.provider_failures import ProviderFailureRepository
 from app.schemas.evidence import SourceItemCreate, SourceItemStatus
 from app.schemas.evidence import ProviderFailureCreate, SourceItemQueryLinkCreate, SourceQueryCreate
-from app.schemas.research import CancelRunData, CreateResearchRunRequest, ResearchProgress
+from app.schemas.research import CancelRunData, CreateResearchRunRequest, ResearchProgress, ResearchRunSummary
 from app.services.providers import (
     BookSignal,
     ProviderRegistry,
@@ -49,11 +49,12 @@ from app.services.ranking import KeywordBlueprint, build_keyword_blueprints
 from app.services.scoring import HypothesisRankingService
 from app.services.shared import (
     ListResult,
+    build_summaries,
     ensure_user,
     resolve_user_id,
     to_research_run,
     to_research_run_details,
-    to_research_run_list_item,
+    to_research_run_list_item_with_summary,
 )
 
 logger = logging.getLogger(__name__)
@@ -160,15 +161,19 @@ class ResearchService:
             if status is not None:
                 statement = statement.where(ResearchRun.status == ResearchRunStatus(status.value if hasattr(status, "value") else status))
 
-            count_statement = select(ResearchRun).where(ResearchRun.user_id == user_id)
+            count_statement = select(func.count()).select_from(ResearchRun).where(ResearchRun.user_id == user_id)
             if status is not None:
                 count_statement = count_statement.where(
                     ResearchRun.status == ResearchRunStatus(status.value if hasattr(status, "value") else status)
                 )
 
             runs = list(session.scalars(statement))
-            total = len(list(session.scalars(count_statement)))
-            items = [to_research_run_list_item(session, run) for run in runs]
+            total = int(session.scalar(count_statement) or 0)
+            summaries = build_summaries(session, [run.id for run in runs])
+            items = [
+                to_research_run_list_item_with_summary(run, summaries.get(run.id, ResearchRunSummary()))
+                for run in runs
+            ]
             return ListResult(items=items, total=total, limit=limit, offset=offset)
 
     def get_run(self, *, current_user: CurrentUser, run_id: UUID):
