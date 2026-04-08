@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ebook-niche-research-engine"
+version = "0.1.0"
+description = "FastAPI backend for an asynchronous ebook niche research pipeline."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+authors = [
+  { name = "Ebook Niche Research Team" }
+]
+dependencies = [
+  "fastapi>=0.115,<1.0",
+  "uvicorn[standard]>=0.30,<1.0",
+  "pydantic>=2.8,<3.0",
+  "pydantic-settings>=2.4,<3.0",
+  "sqlalchemy>=2.0,<3.0",
+  "alembic>=1.13,<2.0",
+  "psycopg[binary]>=3.2,<4.0",
+  "redis>=5.0,<6.0",
+  "httpx>=0.27,<1.0",
+  "playwright>=1.46,<2.0",
+  "pandas>=2.2,<3.0",
+  "openpyxl>=3.1,<4.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9.0",
+  "pytest-asyncio>=0.24,<1.0"
+]
+
+[tool.setuptools]
+packages = ["app", "app.api", "app.api.routes", "app.core", "app.db", "app.db.models", "app.db.repositories", "app.schemas", "app.services", "app.services.clustering", "app.services.extraction", "app.services.hypotheses", "app.services.marketplaces", "app.services.marketplaces.adapters", "app.services.scoring", "tests"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
