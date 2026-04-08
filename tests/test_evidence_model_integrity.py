@@ -58,6 +58,20 @@ def test_evidence_migration_module_is_present() -> None:
     assert callable(migration.downgrade)
 
 
+def test_research_run_status_hardening_migration_is_present() -> None:
+    migration_path = Path.cwd() / "alembic" / "versions" / "0003_add_completed_no_evidence_status.py"
+    spec = importlib.util.spec_from_file_location("migration_0003_add_completed_no_evidence_status", migration_path)
+    assert spec is not None
+    assert spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    assert migration.revision == "0003_add_completed_no_evidence_status"
+    assert migration.down_revision == "0002_add_evidence_layer"
+    assert callable(migration.upgrade)
+    assert callable(migration.downgrade)
+
+
 def test_evidence_tables_exist_in_base_metadata() -> None:
     assert {"source_items", "extracted_signals", "signal_clusters", "niche_hypotheses", "niche_scores"}.issubset(
         set(Base.metadata.tables.keys())

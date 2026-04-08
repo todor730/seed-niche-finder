@@ -26,6 +26,7 @@ class ResearchRunStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
+    COMPLETED_NO_EVIDENCE = "completed_no_evidence"
     FAILED = "failed"
     CANCELLED = "cancelled"
 

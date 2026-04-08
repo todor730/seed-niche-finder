@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from app.api.dependencies import CurrentUser
 from app.core.errors import ExportNotFoundError, RunNotFoundError
-from app.db.models import Export, ExportStatus, ResearchRun
+from app.db.models import Export, ExportStatus, ResearchRun, ResearchRunStatus
 from app.schemas.export import CreateExportRequest
 from app.services.shared import ListResult, resolve_user_id, to_export_resource, to_keyword_list_item, to_opportunity_list_item
 from app.services.summary_service import SummaryService
@@ -117,6 +117,8 @@ class ExportService:
             return keyword_records
         if export_scope == "opportunities":
             return opportunity_records
+        insufficient_evidence = run.status == ResearchRunStatus.COMPLETED_NO_EVIDENCE
+        note = run.error_message or "Research completed without sufficient persisted evidence to support niche claims."
         if export_format == "xlsx":
             return {
                 "run_overview": [
@@ -125,6 +127,8 @@ class ExportService:
                         "seed_niche": run.seed_niche,
                         "status": run.status.value,
                         "generated_at": summary_report.generated_at.isoformat(),
+                        "insufficient_evidence": insufficient_evidence,
+                        "note": note if insufficient_evidence else "",
                     }
                 ],
                 "niche_summaries": niche_summary_rows,
@@ -132,6 +136,17 @@ class ExportService:
                 "opportunities": opportunity_records,
             }
         if export_format == "csv":
+            if insufficient_evidence and not niche_summary_rows:
+                return [
+                    {
+                        "run_id": str(run.id),
+                        "seed_niche": run.seed_niche,
+                        "status": run.status.value,
+                        "generated_at": summary_report.generated_at.isoformat(),
+                        "insufficient_evidence": True,
+                        "note": note,
+                    }
+                ]
             return niche_summary_rows
         return [
             {
@@ -139,6 +154,8 @@ class ExportService:
                 "seed_niche": run.seed_niche,
                 "status": run.status.value,
                 "generated_at": summary_report.generated_at.isoformat(),
+                "insufficient_evidence": insufficient_evidence,
+                "notes": [note] if insufficient_evidence else [],
                 "niche_summaries": niche_summary_records,
                 "keywords": keyword_records,
                 "opportunities": opportunity_records,

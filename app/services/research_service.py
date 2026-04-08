@@ -284,6 +284,20 @@ class ResearchService:
                     "ranked_hypothesis_count": len(ranked_hypotheses),
                 },
             )
+            if not persisted_source_items:
+                return self._complete_run_without_evidence(
+                    session=session,
+                    run=run,
+                    reason="No persisted source evidence was collected from the configured providers.",
+                    detail="no_source_items",
+                )
+            if not ranked_hypotheses:
+                return self._complete_run_without_evidence(
+                    session=session,
+                    run=run,
+                    reason="Persisted evidence did not produce any evidence-backed niche hypotheses.",
+                    detail="no_ranked_hypotheses",
+                )
 
             book_signals = self._source_items_to_book_signals(persisted_source_items)
             keyword_blueprints = self._build_keyword_blueprints(
@@ -314,6 +328,33 @@ class ResearchService:
             session.commit()
             session.refresh(run)
             return run
+
+    def _complete_run_without_evidence(
+        self,
+        *,
+        session: Session,
+        run: ResearchRun,
+        reason: str,
+        detail: str,
+    ) -> ResearchRun:
+        """Mark a run as honestly completed without evidence-backed niche claims."""
+        now = datetime.now(UTC)
+        run.status = ResearchRunStatus.COMPLETED_NO_EVIDENCE
+        run.error_message = reason
+        run.completed_at = now
+        run.updated_at = now
+        logger.warning(
+            "Research run completed without evidence-backed results.",
+            extra={
+                "run_id": str(run.id),
+                "seed_niche": run.seed_niche,
+                "stage": "run_completed_no_evidence",
+                "detail": detail,
+            },
+        )
+        session.commit()
+        session.refresh(run)
+        return run
 
     def _persist_raw_evidence(
         self,

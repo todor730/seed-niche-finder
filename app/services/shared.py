@@ -98,6 +98,7 @@ def build_progress(run: ResearchRun, summary: ResearchRunSummary) -> ResearchPro
         ResearchRunStatus.PENDING: "queued",
         ResearchRunStatus.RUNNING: "researching",
         ResearchRunStatus.COMPLETED: "completed",
+        ResearchRunStatus.COMPLETED_NO_EVIDENCE: "completed_no_evidence",
         ResearchRunStatus.FAILED: "failed",
         ResearchRunStatus.CANCELLED: "cancelled",
     }[status]
@@ -106,6 +107,11 @@ def build_progress(run: ResearchRun, summary: ResearchRunSummary) -> ResearchPro
         completed_steps = total_steps
         percent_complete = 100.0
         message = f"Research completed with {summary.keyword_count} keywords and {summary.opportunity_count} opportunities."
+    elif status == ResearchRunStatus.COMPLETED_NO_EVIDENCE:
+        completed_steps = total_steps
+        percent_complete = 100.0
+        detail = run.error_message or "No persisted evidence met the threshold for evidence-backed niche claims."
+        message = f"Research completed without sufficient persisted evidence to support niche claims. {detail}"
     elif status == ResearchRunStatus.CANCELLED:
         completed_steps = min(total_steps, max(1, summary.keyword_count // 5))
         percent_complete = 0.0 if completed_steps == 0 else round(completed_steps / total_steps * 100, 1)

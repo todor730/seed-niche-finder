@@ -68,7 +68,7 @@ class ResearchProgress(SchemaModel):
         """Ensure progress values remain coherent."""
         if self.total_steps and self.completed_steps > self.total_steps:
             raise ValueError("completed_steps cannot exceed total_steps.")
-        if self.status == ResearchRunStatus.COMPLETED and self.percent_complete < 100:
+        if self.status in {ResearchRunStatus.COMPLETED, ResearchRunStatus.COMPLETED_NO_EVIDENCE} and self.percent_complete < 100:
             raise ValueError("Completed runs must report percent_complete as 100.")
         return self
 
