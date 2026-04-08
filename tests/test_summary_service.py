@@ -5,6 +5,7 @@ from pathlib import Path
 from uuid import UUID
 
 from app.api.dependencies import CurrentUser
+from app.db.models import NicheScore
 from app.schemas.export import CreateExportRequest
 from app.schemas.report import RunSummaryReport
 from app.schemas.research import CreateResearchRunRequest
@@ -133,3 +134,31 @@ def test_repeated_exports_create_distinct_immutable_artifacts(
     assert second_path.exists()
     assert first_path.read_text(encoding="utf-8")
     assert second_path.read_text(encoding="utf-8")
+
+
+def test_summary_service_normalizes_legacy_string_limitations_without_character_splitting(
+    session_factory,
+    workspace: Path,
+    current_user: CurrentUser,
+) -> None:
+    run_id = _create_ranked_run(session_factory, workspace, current_user)
+    summary_service = SummaryService()
+
+    with session_factory() as session:
+        competition_score = session.query(NicheScore).filter(NicheScore.run_id == run_id, NicheScore.score_type == "competition_score").first()
+        assert competition_score is not None
+        evidence_json = dict(competition_score.evidence_json or {})
+        competition_features = dict(evidence_json.get("competition_features", {}) or {})
+        competition_features["limitations"] = "Legacy sparse evidence note."
+        evidence_json["competition_features"] = competition_features
+        competition_score.evidence_json = evidence_json
+        session.commit()
+
+    with session_factory() as session:
+        report = summary_service.build_run_summary_report(session=session, run_id=run_id)
+
+    top_summary = report.top_niche_opportunities[0]
+    assert top_summary.competition_density.limitations == ["Legacy sparse evidence note."]
+
+    export_rows = summary_service.build_export_rows(report=report)
+    assert export_rows[0]["competition_limitations"] == "Legacy sparse evidence note."

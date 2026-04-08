@@ -189,7 +189,7 @@ class SummaryService:
             direct_match_density=self._as_score(competition_features.get("direct_match_density")),
             evidence_coverage=self._as_ratio(competition_features.get("evidence_coverage")),
             fallback_used=bool(competition_features.get("fallback_used", False)),
-            limitations=[str(item) for item in competition_features.get("limitations", [])],
+            limitations=self._normalize_limitations(competition_features.get("limitations", [])),
         )
         score_breakdown = SummaryScoreBreakdown(
             discovery_score=self._score_value(scores, "discovery_score"),
@@ -453,6 +453,26 @@ class SummaryService:
             return max(0, int(value))
         except (TypeError, ValueError):
             return 0
+
+    @staticmethod
+    def _normalize_limitations(value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            cleaned = " ".join(value.split()).strip()
+            return [cleaned] if cleaned else []
+        if isinstance(value, (list, tuple, set)):
+            limitations: list[str] = []
+            seen: set[str] = set()
+            for item in value:
+                cleaned = " ".join(str(item).split()).strip()
+                if not cleaned or cleaned in seen:
+                    continue
+                seen.add(cleaned)
+                limitations.append(cleaned)
+            return limitations
+        cleaned = " ".join(str(value).split()).strip()
+        return [cleaned] if cleaned else []
 
     @staticmethod
     def _ensure_no_fluff(summary: NicheOpportunitySummary) -> None:

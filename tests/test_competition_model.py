@@ -116,3 +116,6 @@ def test_competition_density_model_uses_honest_fallback_when_public_evidence_is_
     assert assessment.features.evidence_coverage < 0.5
     assert 40.0 <= assessment.density_score <= 65.0
     assert "limitations" in assessment.evidence_json
+    assert assessment.evidence_json["limitations"] == [
+        "Public-only provider evidence may understate true marketplace competition when review/rating or catalog breadth signals are sparse."
+    ]

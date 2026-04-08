@@ -104,9 +104,9 @@ class CompetitionDensityModel:
             "direct_match_density": round(features.direct_match_density, 1),
             "evidence_coverage": round(features.evidence_coverage, 2),
             "fallback_used": features.fallback_used,
-            "limitations": (
+            "limitations": [
                 "Public-only provider evidence may understate true marketplace competition when review/rating or catalog breadth signals are sparse."
-            ),
+            ],
         }
         return CompetitionAssessment(
             density_score=round(density_score, 1),
