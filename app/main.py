@@ -42,7 +42,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             user_agent=app_settings.provider_user_agent,
         ),
     )
-    Base.metadata.create_all(bind=engine)
+    if app_settings.should_auto_create_schema:
+        Base.metadata.create_all(bind=engine)
+        logger.info(
+            "Database schema auto-created for local development.",
+            extra={
+                "app_env": app_settings.app_env,
+                "database_url": app_settings.database_url,
+                "stage": "schema_auto_create_enabled",
+            },
+        )
     Path(app_settings.export_storage_path).mkdir(parents=True, exist_ok=True)
 
     application = FastAPI(
@@ -106,6 +115,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "host": app_settings.app_host,
             "port": app_settings.app_port,
             "api_prefix": app_settings.api_v1_prefix,
+            "schema_auto_create": app_settings.should_auto_create_schema,
         },
     )
     return application

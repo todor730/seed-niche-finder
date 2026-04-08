@@ -89,6 +89,16 @@ class Settings(BaseSettings):
         """Support comma-separated or JSON-style provider input."""
         return cls._parse_csv_or_json_list(value)
 
+    @property
+    def is_sqlite(self) -> bool:
+        """Return whether the configured database uses SQLite."""
+        return self.database_url.strip().lower().startswith("sqlite:")
+
+    @property
+    def should_auto_create_schema(self) -> bool:
+        """Allow metadata.create_all only for local SQLite development."""
+        return self.app_env == "dev" and self.is_sqlite
+
 
 @lru_cache
 def get_settings() -> Settings:
