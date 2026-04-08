@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -49,8 +51,15 @@ class ExportService:
 
             export_format = payload.format.value if hasattr(payload.format, "value") else str(payload.format)
             export_scope = payload.scope.value if hasattr(payload.scope, "value") else str(payload.scope)
-            file_name = f"{run.seed_niche.replace(' ', '-')}-{export_scope}.{export_format}"
-            file_path = self._export_storage_path / file_name
+            export_id = uuid4()
+            file_name = self._build_export_file_name(
+                seed_niche=run.seed_niche,
+                export_scope=export_scope,
+                export_format=export_format,
+                export_id=export_id,
+            )
+            file_path = self._export_storage_path / str(run.id) / file_name
+            file_path.parent.mkdir(parents=True, exist_ok=True)
             payload_for_export = self._build_export_payload(
                 session=session,
                 run=run,
@@ -60,7 +69,7 @@ class ExportService:
             self._write_export(file_path, export_format, payload_for_export)
 
             export = Export(
-                id=uuid4(),
+                id=export_id,
                 run_id=run_id,
                 export_format=export_format,
                 scope=export_scope,
@@ -73,6 +82,20 @@ class ExportService:
             session.commit()
             session.refresh(export)
             return to_export_resource(export)
+
+    @staticmethod
+    def _build_export_file_name(
+        *,
+        seed_niche: str,
+        export_scope: str,
+        export_format: str,
+        export_id: UUID,
+    ) -> str:
+        """Build an immutable, per-export artifact name."""
+        normalized_seed = re.sub(r"[^a-z0-9]+", "-", seed_niche.strip().lower()).strip("-")
+        safe_seed = (normalized_seed or "research-run")[:80]
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        return f"{safe_seed}-{export_scope}-{timestamp}-{export_id.hex}.{export_format}"
 
     def list_run_exports(self, *, current_user: CurrentUser, run_id: UUID, limit: int, offset: int) -> ListResult:
         """List persisted export records for a run."""
@@ -169,6 +192,8 @@ class ExportService:
         payload: list[dict[str, object]] | dict[str, list[dict[str, object]]],
     ) -> None:
         """Write the export records to disk in the requested format."""
+        if file_path.exists():
+            raise FileExistsError(f"Refusing to overwrite existing export artifact at {file_path}.")
         if export_format == "json":
             file_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             return

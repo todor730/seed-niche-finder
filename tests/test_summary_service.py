@@ -102,3 +102,34 @@ def test_full_run_json_export_includes_niche_summaries(
     assert "source_agreement" in first_summary
     assert "competition_density" in first_summary
     assert "next_validation_queries" in first_summary
+
+
+def test_repeated_exports_create_distinct_immutable_artifacts(
+    session_factory,
+    workspace: Path,
+    current_user: CurrentUser,
+) -> None:
+    run_id = _create_ranked_run(session_factory, workspace, current_user)
+    export_service = ExportService(session_factory, export_storage_path=str(workspace / "exports"))
+
+    first_export = export_service.create_export(
+        current_user=current_user,
+        run_id=run_id,
+        payload=CreateExportRequest(format="json", scope="full_run"),
+    )
+    second_export = export_service.create_export(
+        current_user=current_user,
+        run_id=run_id,
+        payload=CreateExportRequest(format="json", scope="full_run"),
+    )
+
+    first_path = Path(first_export.storage_uri or "")
+    second_path = Path(second_export.storage_uri or "")
+
+    assert first_export.id != second_export.id
+    assert first_export.file_name != second_export.file_name
+    assert first_path != second_path
+    assert first_path.exists()
+    assert second_path.exists()
+    assert first_path.read_text(encoding="utf-8")
+    assert second_path.read_text(encoding="utf-8")
