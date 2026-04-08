@@ -87,6 +87,10 @@ class SourceItem(Base):
     )
 
     research_run: Mapped["ResearchRun"] = relationship(back_populates="source_items")
+    source_query_links: Mapped[list["SourceItemQueryLink"]] = relationship(
+        back_populates="source_item",
+        cascade="all, delete-orphan",
+    )
     extracted_signals: Mapped[list["ExtractedSignal"]] = relationship(
         back_populates="source_item",
         cascade="all, delete-orphan",

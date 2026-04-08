@@ -94,6 +94,10 @@ class ResearchRun(Base):
         back_populates="research_run",
         cascade="all, delete-orphan",
     )
+    source_queries: Mapped[list["SourceQuery"]] = relationship(
+        back_populates="research_run",
+        cascade="all, delete-orphan",
+    )
     extracted_signals: Mapped[list["ExtractedSignal"]] = relationship(
         back_populates="research_run",
         cascade="all, delete-orphan",

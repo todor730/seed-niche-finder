@@ -23,6 +23,8 @@ from app.db.repositories.niche_hypotheses import NicheHypothesisListFilters, Nic
 from app.db.repositories.niche_scores import NicheScoreListFilters, NicheScoreRepository
 from app.db.repositories.signal_clusters import SignalClusterListFilters, SignalClusterRepository
 from app.db.repositories.source_items import SourceItemListFilters, SourceItemRepository
+from app.db.repositories.source_item_query_links import SourceItemQueryLinkRepository
+from app.db.repositories.source_queries import SourceQueryRepository
 
 __all__ = [
     "ExtractedSignalListFilters",
@@ -35,5 +37,7 @@ __all__ = [
     "SignalClusterListFilters",
     "SignalClusterRepository",
     "SourceItemListFilters",
+    "SourceItemQueryLinkRepository",
     "SourceItemRepository",
+    "SourceQueryRepository",
 ]

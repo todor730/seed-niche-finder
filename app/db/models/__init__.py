@@ -11,6 +11,8 @@ from app.db.models.opportunity import Opportunity, OpportunityStatus
 from app.db.models.research_run import ResearchRun, ResearchRunStatus
 from app.db.models.signal_cluster import SignalCluster
 from app.db.models.source_item import SourceItem, SourceItemStatus
+from app.db.models.source_item_query_link import SourceItemQueryLink
+from app.db.models.source_query import SourceQuery
 from app.db.models.trend_metrics import TrendMetrics, TrendMetricsStatus
 from app.db.models.user import User, UserStatus
 
@@ -34,6 +36,8 @@ __all__ = [
     "SignalCluster",
     "SourceItem",
     "SourceItemStatus",
+    "SourceItemQueryLink",
+    "SourceQuery",
     "TrendMetrics",
     "TrendMetricsStatus",
     "User",

@@ -7,7 +7,20 @@ from uuid import UUID
 from sqlalchemy import func, select
 
 from app.api.dependencies import CurrentUser
-from app.db.models import ExtractedSignal, KeywordCandidate, NicheHypothesis, NicheScore, Opportunity, ResearchRun, ResearchRunStatus, SignalCluster, SourceItem, SourceItemStatus
+from app.db.models import (
+    ExtractedSignal,
+    KeywordCandidate,
+    NicheHypothesis,
+    NicheScore,
+    Opportunity,
+    ResearchRun,
+    ResearchRunStatus,
+    SignalCluster,
+    SourceItem,
+    SourceItemQueryLink,
+    SourceItemStatus,
+    SourceQuery,
+)
 from app.schemas.research import CreateResearchRunRequest
 from app.services.providers import ProviderFailure, ProviderQuery, ProviderQueryResult, ProviderSearchBatchResult, RawSourceItem
 from app.services.research_service import ResearchService
@@ -114,6 +127,50 @@ def make_empty_batch(*, include_failure: bool = False) -> ProviderSearchBatchRes
         queries=[query],
         results=[],
         failures=failures,
+    )
+
+
+def make_multi_query_traceability_batch() -> ProviderSearchBatchResult:
+    first_query = ProviderQuery(text="romance books", kind="books", priority=95, tags=("books",))
+    second_query = ProviderQuery(text="best romance books", kind="best_of", priority=90, tags=("best_of",))
+    first_result = ProviderQueryResult(
+        provider_name="google_books",
+        query=first_query,
+        items=[
+            make_raw_item(
+                provider_name="google_books",
+                query_text=first_query.text,
+                dedupe_key="g1",
+                title="Enemies to Lovers Small Town Romance",
+                categories=["Romance", "Enemies to Lovers", "Small Town Romance"],
+            ),
+            make_raw_item(
+                provider_name="google_books",
+                query_text=first_query.text,
+                dedupe_key="g2",
+                title="Heartfelt Small Town Romance for Women Over 40",
+                categories=["Romance", "Small Town Romance", "Women Over 40"],
+            ),
+        ],
+    )
+    second_result = ProviderQueryResult(
+        provider_name="google_books",
+        query=second_query,
+        items=[
+            make_raw_item(
+                provider_name="google_books",
+                query_text=second_query.text,
+                dedupe_key="g1",
+                title="Enemies to Lovers Small Town Romance",
+                categories=["Romance", "Enemies to Lovers", "Small Town Romance"],
+            ),
+        ],
+    )
+    return ProviderSearchBatchResult(
+        seed_niche="romance",
+        queries=[first_query, second_query],
+        results=[first_result, second_result],
+        failures=[],
     )
 
 
@@ -258,6 +315,43 @@ def test_research_service_marks_partial_failure_only_run_as_completed_without_ev
     assert run is not None
     assert run.status == ResearchRunStatus.COMPLETED_NO_EVIDENCE
     assert run.error_message == "No persisted source evidence was collected from the configured providers."
+
+
+def test_research_service_preserves_query_level_traceability_for_deduped_source_items(
+    session_factory,
+    workspace: Path,
+    current_user: CurrentUser,
+) -> None:
+    service = ResearchService(
+        session_factory,
+        export_storage_path=str(workspace / "exports"),
+        provider_registry=FakeProviderRegistry(make_multi_query_traceability_batch()),
+    )
+
+    created_run = service.create_run(
+        current_user=current_user,
+        payload=CreateResearchRunRequest(seed_niche="romance", config={"max_candidates": 20, "top_k": 5}),
+    )
+
+    with session_factory() as session:
+        source_items = list(session.scalars(select(SourceItem).where(SourceItem.run_id == created_run.id).order_by(SourceItem.dedupe_key)))
+        source_queries = list(session.scalars(select(SourceQuery).where(SourceQuery.run_id == created_run.id).order_by(SourceQuery.query_text)))
+        links = list(session.scalars(select(SourceItemQueryLink).order_by(SourceItemQueryLink.created_at)))
+        g1 = next(item for item in source_items if item.dedupe_key == "g1")
+        g1_query_texts = sorted(
+            session.scalars(
+                select(SourceQuery.query_text)
+                .join(SourceItemQueryLink, SourceItemQueryLink.source_query_id == SourceQuery.id)
+                .where(SourceItemQueryLink.source_item_id == g1.id)
+            )
+        )
+
+    assert len(source_items) == 2
+    assert len(source_queries) == 2
+    assert len(links) == 3
+    assert [query.query_text for query in source_queries] == ["best romance books", "romance books"]
+    assert g1.query_text == "romance books"
+    assert g1_query_texts == ["best romance books", "romance books"]
 
 
 def test_research_service_marks_run_failed_when_provider_registry_raises(

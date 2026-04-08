@@ -100,6 +100,50 @@ class SourceItemRead(EvidenceSchemaModel):
     updated_at: datetime
 
 
+class SourceQueryCreate(EvidenceSchemaModel):
+    """Write schema for persisted provider queries."""
+
+    run_id: UUID
+    provider_name: str = Field(min_length=1, max_length=100)
+    query_text: str = Field(min_length=1, max_length=255)
+    query_kind: str | None = Field(default=None, max_length=50)
+    priority: int = Field(default=100)
+    tags_json: list[str] = Field(default_factory=list)
+    item_count: int = Field(default=0, ge=0)
+
+
+class SourceQueryRead(EvidenceSchemaModel):
+    """Read schema for persisted provider queries."""
+
+    id: UUID
+    run_id: UUID
+    provider_name: str
+    query_text: str
+    query_kind: str | None = None
+    priority: int
+    tags_json: list[str]
+    item_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class SourceItemQueryLinkCreate(EvidenceSchemaModel):
+    """Write schema for source item/query traceability links."""
+
+    source_query_id: UUID
+    source_item_id: UUID
+
+
+class SourceItemQueryLinkRead(EvidenceSchemaModel):
+    """Read schema for source item/query traceability links."""
+
+    id: UUID
+    source_query_id: UUID
+    source_item_id: UUID
+    created_at: datetime
+    updated_at: datetime
+
+
 class ExtractedSignalCreate(EvidenceSchemaModel):
     """Write schema for extracted signals."""
 

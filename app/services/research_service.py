@@ -29,8 +29,11 @@ from app.db.models import (
     TrendMetrics,
     TrendMetricsStatus,
 )
+from app.db.repositories.source_item_query_links import SourceItemQueryLinkRepository
 from app.db.repositories.source_items import SourceItemRepository
+from app.db.repositories.source_queries import SourceQueryRepository
 from app.schemas.evidence import SourceItemCreate, SourceItemStatus
+from app.schemas.evidence import SourceItemQueryLinkCreate, SourceQueryCreate
 from app.schemas.research import CancelRunData, CreateResearchRunRequest, ResearchProgress
 from app.services.providers import (
     BookSignal,
@@ -364,47 +367,66 @@ class ResearchService:
         batch: ProviderSearchBatchResult,
     ) -> list[SourceItem]:
         """Persist standardized raw evidence items for a research run."""
-        repository = SourceItemRepository(session)
-        persisted_items: list[SourceItem] = []
+        source_item_repository = SourceItemRepository(session)
+        source_query_repository = SourceQueryRepository(session)
+        link_repository = SourceItemQueryLinkRepository(session)
+        persisted_items_by_key: dict[tuple[str, str], SourceItem] = {}
 
-        for provider_name in sorted({item.provider_name for item in batch.all_items}):
-            provider_items = [item for item in batch.all_items if item.provider_name == provider_name]
-            existing_dedupe_keys = repository.list_existing_dedupe_keys(
-                run_id=run.id,
-                provider_name=provider_name,
-                dedupe_keys=[item.dedupe_key for item in provider_items],
+        for result in batch.results:
+            source_query = source_query_repository.get_or_create(
+                SourceQueryCreate(
+                    run_id=run.id,
+                    provider_name=result.provider_name,
+                    query_text=result.query.text,
+                    query_kind=result.query.kind,
+                    priority=result.query.priority,
+                    tags_json=list(result.query.tags),
+                    item_count=len(result.items),
+                )
             )
-            payloads: list[SourceItemCreate] = []
-            for raw_item in provider_items:
-                if raw_item.dedupe_key in existing_dedupe_keys:
-                    continue
-                payloads.append(
-                    SourceItemCreate(
+
+            for raw_item in result.items:
+                item_key = (raw_item.provider_name, raw_item.dedupe_key)
+                source_item = persisted_items_by_key.get(item_key)
+                if source_item is None:
+                    source_item = source_item_repository.get_by_dedupe_key(
                         run_id=run.id,
                         provider_name=raw_item.provider_name,
-                        query_text=raw_item.query_text,
-                        query_kind=raw_item.query_kind,
-                        provider_item_id=raw_item.provider_item_id,
                         dedupe_key=raw_item.dedupe_key,
-                        source_url=raw_item.source_url,
-                        title=raw_item.title,
-                        subtitle=raw_item.subtitle,
-                        authors_json=list(raw_item.authors),
-                        categories_json=list(raw_item.categories),
-                        description_text=raw_item.description_text,
-                        content_text=raw_item.content_text,
-                        published_date_raw=raw_item.published_date_raw,
-                        average_rating=raw_item.average_rating,
-                        rating_count=raw_item.rating_count,
-                        review_count=raw_item.review_count,
-                        raw_payload_json=dict(raw_item.raw_payload),
-                        status=SourceItemStatus.FETCHED,
+                    )
+                if source_item is None:
+                    source_item = source_item_repository.create(
+                        SourceItemCreate(
+                            run_id=run.id,
+                            provider_name=raw_item.provider_name,
+                            query_text=raw_item.query_text,
+                            query_kind=raw_item.query_kind,
+                            provider_item_id=raw_item.provider_item_id,
+                            dedupe_key=raw_item.dedupe_key,
+                            source_url=raw_item.source_url,
+                            title=raw_item.title,
+                            subtitle=raw_item.subtitle,
+                            authors_json=list(raw_item.authors),
+                            categories_json=list(raw_item.categories),
+                            description_text=raw_item.description_text,
+                            content_text=raw_item.content_text,
+                            published_date_raw=raw_item.published_date_raw,
+                            average_rating=raw_item.average_rating,
+                            rating_count=raw_item.rating_count,
+                            review_count=raw_item.review_count,
+                            raw_payload_json=dict(raw_item.raw_payload),
+                            status=SourceItemStatus.FETCHED,
+                        )
+                    )
+                persisted_items_by_key[item_key] = source_item
+                link_repository.create_if_missing(
+                    SourceItemQueryLinkCreate(
+                        source_query_id=source_query.id,
+                        source_item_id=source_item.id,
                     )
                 )
-            if payloads:
-                persisted_items.extend(repository.bulk_create(payloads))
 
-        return persisted_items
+        return list(persisted_items_by_key.values())
 
     def _extract_signals(
         self,
