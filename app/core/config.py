@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     provider_http_timeout_seconds: float = Field(default=2.0, alias="PROVIDER_HTTP_TIMEOUT_SECONDS")
     provider_http_max_retries: int = Field(default=1, alias="PROVIDER_HTTP_MAX_RETRIES")
     provider_http_retry_backoff_seconds: float = Field(default=0.25, alias="PROVIDER_HTTP_RETRY_BACKOFF_SECONDS")
+    provider_max_concurrency: int = Field(default=4, alias="PROVIDER_MAX_CONCURRENCY")
     provider_user_agent: str = Field(
         default="ebook-niche-research-engine/0.1 (+local-dev)",
         alias="PROVIDER_USER_AGENT",
@@ -88,6 +89,14 @@ class Settings(BaseSettings):
     def parse_enabled_providers(cls, value: Any) -> list[str]:
         """Support comma-separated or JSON-style provider input."""
         return cls._parse_csv_or_json_list(value)
+
+    @field_validator("provider_max_concurrency")
+    @classmethod
+    def validate_provider_max_concurrency(cls, value: int) -> int:
+        """Require a positive provider concurrency limit."""
+        if value < 1:
+            raise ValueError("PROVIDER_MAX_CONCURRENCY must be at least 1.")
+        return value
 
     @property
     def is_sqlite(self) -> bool:

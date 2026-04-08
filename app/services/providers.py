@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Flag, auto
@@ -44,6 +45,7 @@ class ProviderRequestPolicy:
     timeout_seconds: float = 2.0
     max_retries: int = 1
     retry_backoff_seconds: float = 0.25
+    max_concurrency: int = 4
     user_agent: str = "ebook-niche-research-engine/0.1 (+local-dev)"
     follow_redirects: bool = True
 
@@ -136,6 +138,15 @@ class ProviderSearchBatchResult:
     def provider_names(self) -> list[str]:
         """Return provider names that participated in the batch."""
         return sorted({result.provider_name for result in self.results} | {failure.provider_name for failure in self.failures})
+
+
+@dataclass(frozen=True, slots=True)
+class _ProviderTaskExecution:
+    """Internal execution result for one provider/query task."""
+
+    task_index: int
+    result: ProviderQueryResult | None = None
+    failure: ProviderFailure | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -645,55 +656,97 @@ class ProviderRegistry:
             queries = hook.expand(seed_niche, queries)
         return _dedupe_queries(queries)
 
+    def _execute_provider_query(
+        self,
+        *,
+        task_index: int,
+        provider: BaseProvider,
+        query: ProviderQuery,
+    ) -> _ProviderTaskExecution:
+        """Execute one provider query with isolated client state."""
+        try:
+            with httpx.Client() as client:
+                result = provider.search(client=client, query=query, policy=self._request_policy)
+        except ProviderSearchError as exc:
+            logger.warning(
+                "Provider query failed.",
+                extra={
+                    "provider_name": provider.provider_name,
+                    "query_text": query.text,
+                    "query_kind": query.kind,
+                    "retryable": exc.retryable,
+                },
+            )
+            return _ProviderTaskExecution(
+                task_index=task_index,
+                failure=ProviderFailure(
+                    provider_name=provider.provider_name,
+                    query=query,
+                    error_type=exc.__class__.__name__,
+                    message=str(exc),
+                    retryable=exc.retryable,
+                ),
+            )
+        except Exception as exc:  # pragma: no cover - defensive boundary
+            logger.exception(
+                "Provider query failed with unexpected error.",
+                extra={
+                    "provider_name": provider.provider_name,
+                    "query_text": query.text,
+                    "query_kind": query.kind,
+                },
+            )
+            return _ProviderTaskExecution(
+                task_index=task_index,
+                failure=ProviderFailure(
+                    provider_name=provider.provider_name,
+                    query=query,
+                    error_type=exc.__class__.__name__,
+                    message=str(exc),
+                    retryable=False,
+                ),
+            )
+        return _ProviderTaskExecution(task_index=task_index, result=result)
+
     def search(self, seed_niche: str, *, raise_on_total_failure: bool = False) -> ProviderSearchBatchResult:
         """Fan out to all providers and aggregate raw evidence items."""
         queries = self.build_queries(seed_niche)
         batch = ProviderSearchBatchResult(seed_niche=seed_niche, queries=queries)
 
-        with httpx.Client() as client:
-            for provider in self.list_enabled():
-                provider_queries = _dedupe_queries(provider.expand_queries(seed_niche, queries))
-                for query in provider_queries:
-                    try:
-                        result = provider.search(client=client, query=query, policy=self._request_policy)
-                    except ProviderSearchError as exc:
-                        failure = ProviderFailure(
-                            provider_name=provider.provider_name,
-                            query=query,
-                            error_type=exc.__class__.__name__,
-                            message=str(exc),
-                            retryable=exc.retryable,
-                        )
-                        batch.failures.append(failure)
-                        logger.warning(
-                            "Provider query failed.",
-                            extra={
-                                "provider_name": provider.provider_name,
-                                "query_text": query.text,
-                                "query_kind": query.kind,
-                                "retryable": exc.retryable,
-                            },
-                        )
-                        continue
-                    except Exception as exc:  # pragma: no cover - defensive boundary
-                        failure = ProviderFailure(
-                            provider_name=provider.provider_name,
-                            query=query,
-                            error_type=exc.__class__.__name__,
-                            message=str(exc),
-                            retryable=False,
-                        )
-                        batch.failures.append(failure)
-                        logger.exception(
-                            "Provider query failed with unexpected error.",
-                            extra={
-                                "provider_name": provider.provider_name,
-                                "query_text": query.text,
-                                "query_kind": query.kind,
-                            },
-                        )
-                        continue
-                    batch.results.append(result)
+        task_specs: list[tuple[int, BaseProvider, ProviderQuery]] = []
+        for provider in self.list_enabled():
+            provider_queries = _dedupe_queries(provider.expand_queries(seed_niche, queries))
+            for query in provider_queries:
+                task_specs.append((len(task_specs), provider, query))
+
+        if not task_specs:
+            return batch
+
+        max_workers = min(max(1, self._request_policy.max_concurrency), len(task_specs))
+        logger.info(
+            "Starting provider fan-out.",
+            extra={
+                "seed_niche": seed_niche,
+                "provider_count": len(self.list_enabled()),
+                "task_count": len(task_specs),
+                "max_concurrency": max_workers,
+            },
+        )
+
+        task_executions: list[_ProviderTaskExecution] = []
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="provider-fanout") as executor:
+            futures = [
+                executor.submit(self._execute_provider_query, task_index=task_index, provider=provider, query=query)
+                for task_index, provider, query in task_specs
+            ]
+            for future in as_completed(futures):
+                task_executions.append(future.result())
+
+        for execution in sorted(task_executions, key=lambda item: item.task_index):
+            if execution.result is not None:
+                batch.results.append(execution.result)
+            elif execution.failure is not None:
+                batch.failures.append(execution.failure)
 
         if raise_on_total_failure and not batch.all_items and batch.failures:
             raise RuntimeError(f"All providers failed for seed niche '{seed_niche}'.")

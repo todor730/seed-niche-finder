@@ -39,6 +39,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             timeout_seconds=app_settings.provider_http_timeout_seconds,
             max_retries=app_settings.provider_http_max_retries,
             retry_backoff_seconds=app_settings.provider_http_retry_backoff_seconds,
+            max_concurrency=app_settings.provider_max_concurrency,
             user_agent=app_settings.provider_user_agent,
         ),
     )
