@@ -40,6 +40,7 @@ from app.services.providers import (
     BookSignal,
     ProviderRegistry,
     ProviderSearchBatchResult,
+    build_book_signal,
     build_enabled_providers,
 )
 from app.services.clustering import ClusteringService
@@ -75,7 +76,6 @@ class ResearchService:
         ranking_service: HypothesisRankingService | None = None,
     ) -> None:
         self._session_factory = session_factory
-        self._export_storage_path = export_storage_path
         self._provider_registry = provider_registry or ProviderRegistry(build_enabled_providers(("google_books", "open_library")))
         self._extraction_service = extraction_service or RuleBasedExtractionService()
         self._clustering_service = clustering_service or ClusteringService()
@@ -536,25 +536,19 @@ class ResearchService:
     @staticmethod
     def _source_items_to_book_signals(source_items: list[SourceItem]) -> list[BookSignal]:
         """Bridge persisted raw evidence into the current ranking-compatible shape."""
-        signals: list[BookSignal] = []
-        for item in source_items:
-            published_year = None
-            if item.published_date_raw:
-                year_candidate = item.published_date_raw[:4]
-                published_year = int(year_candidate) if year_candidate.isdigit() else None
-            signals.append(
-                BookSignal(
-                    title=item.title,
-                    authors=list(item.authors_json),
-                    categories=list(item.categories_json),
-                    review_count=item.review_count,
-                    average_rating=item.average_rating,
-                    published_year=published_year,
-                    source=item.provider_name,
-                    source_url=item.source_url,
-                )
+        return [
+            build_book_signal(
+                title=item.title,
+                authors=item.authors_json,
+                categories=item.categories_json,
+                review_count=item.review_count,
+                average_rating=item.average_rating,
+                published_date_raw=item.published_date_raw,
+                source=item.provider_name,
+                source_url=item.source_url,
             )
-        return signals
+            for item in source_items
+        ]
 
     def _mark_run_failed(self, *, run_id: UUID, message: str) -> None:
         """Mark a research run as failed in its own transaction."""

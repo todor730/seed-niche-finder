@@ -3,7 +3,15 @@ from __future__ import annotations
 import httpx
 
 import app.services.providers as provider_module
-from app.services.providers import GoogleBooksProvider, OpenLibraryProvider, ProviderQuery, ProviderRequestPolicy
+from app.services.providers import (
+    GoogleBooksProvider,
+    OpenLibraryProvider,
+    ProviderQuery,
+    ProviderRequestPolicy,
+    RawSourceItem,
+    build_book_signal,
+    raw_source_items_to_book_signals,
+)
 
 
 def test_google_books_search_normalizes_to_standard_raw_source_item(monkeypatch) -> None:
@@ -122,3 +130,36 @@ def test_provider_normalization_never_accepts_non_http_urls() -> None:
 
     assert normalized is not None
     assert normalized.source_url is None
+
+
+def test_book_signal_bridge_helpers_share_one_published_year_mapping() -> None:
+    raw_item = RawSourceItem(
+        provider_name="google_books",
+        query_text="romance books",
+        query_kind="books",
+        dedupe_key="g124",
+        title="Example Romance",
+        authors=["A. Author"],
+        categories=["Romance"],
+        published_date_raw="2024-05-01",
+        review_count=12,
+        average_rating=4.5,
+        source_url="https://books.google.test/item",
+        raw_payload={"id": "g124"},
+    )
+
+    bridged_items = raw_source_items_to_book_signals([raw_item])
+    manual_bridge = build_book_signal(
+        title="Example Romance",
+        authors=["A. Author"],
+        categories=["Romance"],
+        review_count=12,
+        average_rating=4.5,
+        published_date_raw="2024-05-01",
+        source="google_books",
+        source_url="https://books.google.test/item",
+    )
+
+    assert len(bridged_items) == 1
+    assert bridged_items[0] == manual_bridge
+    assert bridged_items[0].published_year == 2024

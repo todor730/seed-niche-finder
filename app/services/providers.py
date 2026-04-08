@@ -331,16 +331,40 @@ def _parse_published_year(published_date_raw: str | None) -> int | None:
     return int(year_candidate) if year_candidate.isdigit() else None
 
 
+def build_book_signal(
+    *,
+    title: str,
+    authors: Sequence[str],
+    categories: Sequence[str],
+    review_count: int | None,
+    average_rating: float | None,
+    published_date_raw: str | None,
+    source: str,
+    source_url: str | None,
+) -> BookSignal:
+    """Build the ranking bridge shape from canonical evidence fields."""
+    return BookSignal(
+        title=title,
+        authors=list(authors),
+        categories=list(categories),
+        review_count=review_count,
+        average_rating=average_rating,
+        published_year=_parse_published_year(published_date_raw),
+        source=source,
+        source_url=source_url,
+    )
+
+
 def raw_source_items_to_book_signals(items: Sequence[RawSourceItem]) -> list[BookSignal]:
     """Bridge raw provider output into the current ranking-compatible shape."""
     return [
-        BookSignal(
+        build_book_signal(
             title=item.title,
-            authors=list(item.authors),
-            categories=list(item.categories),
+            authors=item.authors,
+            categories=item.categories,
             review_count=item.review_count,
             average_rating=item.average_rating,
-            published_year=_parse_published_year(item.published_date_raw),
+            published_date_raw=item.published_date_raw,
             source=item.provider_name,
             source_url=item.source_url,
         )

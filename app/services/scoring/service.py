@@ -44,11 +44,6 @@ class RankingCalibration:
     opportunity_weight: float = 0.29
     competition_inverse_weight: float = 0.20
     confidence_weight: float = 0.25
-    generic_penalty_weight: float = 18.0
-    single_source_penalty_weight: float = 16.0
-    competition_density_weight: float = 70.0
-    novelty_weight: float = 0.55
-    saturation_weight: float = 0.45
 
 
 class HypothesisRankingService:
