@@ -144,6 +144,35 @@ class SourceItemQueryLinkRead(EvidenceSchemaModel):
     updated_at: datetime
 
 
+class ProviderFailureCreate(EvidenceSchemaModel):
+    """Write schema for persisted provider failures."""
+
+    run_id: UUID
+    provider_name: str = Field(min_length=1, max_length=100)
+    query_text: str = Field(min_length=1, max_length=255)
+    query_kind: str | None = Field(default=None, max_length=50)
+    error_type: str = Field(min_length=1, max_length=100)
+    message: str = Field(min_length=1)
+    retryable: bool = False
+    occurred_at: datetime
+
+
+class ProviderFailureRead(EvidenceSchemaModel):
+    """Read schema for persisted provider failures."""
+
+    id: UUID
+    run_id: UUID
+    provider_name: str
+    query_text: str
+    query_kind: str | None = None
+    error_type: str
+    message: str
+    retryable: bool
+    occurred_at: datetime
+    created_at: datetime
+    updated_at: datetime
+
+
 class ExtractedSignalCreate(EvidenceSchemaModel):
     """Write schema for extracted signals."""
 

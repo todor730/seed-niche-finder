@@ -20,6 +20,7 @@ from app.db.models import (
     SourceItemQueryLink,
     SourceItemStatus,
     SourceQuery,
+    ProviderFailureRecord,
 )
 from app.schemas.research import CreateResearchRunRequest
 from app.services.providers import ProviderFailure, ProviderQuery, ProviderQueryResult, ProviderSearchBatchResult, RawSourceItem
@@ -245,10 +246,17 @@ def test_research_service_handles_partial_provider_failure_and_persists_availabl
     with session_factory() as session:
         run = session.get(ResearchRun, UUID(str(created_run.id)))
         source_item_count = session.scalar(select(func.count()).select_from(SourceItem).where(SourceItem.run_id == created_run.id))
+        failures = list(session.scalars(select(ProviderFailureRecord).where(ProviderFailureRecord.run_id == created_run.id)))
 
     assert run is not None
     assert run.status == ResearchRunStatus.COMPLETED
     assert (source_item_count or 0) == 2
+    assert len(failures) == 1
+    assert failures[0].provider_name == "open_library"
+    assert failures[0].query_text == "romance books"
+    assert failures[0].error_type == "ProviderSearchError"
+    assert failures[0].message == "timed out"
+    assert failures[0].retryable is True
 
 
 def test_research_service_completes_without_evidence_and_does_not_materialize_synthetic_results(
@@ -311,10 +319,13 @@ def test_research_service_marks_partial_failure_only_run_as_completed_without_ev
 
     with session_factory() as session:
         run = session.get(ResearchRun, UUID(str(created_run.id)))
+        failures = list(session.scalars(select(ProviderFailureRecord).where(ProviderFailureRecord.run_id == created_run.id)))
 
     assert run is not None
     assert run.status == ResearchRunStatus.COMPLETED_NO_EVIDENCE
     assert run.error_message == "No persisted source evidence was collected from the configured providers."
+    assert len(failures) == 1
+    assert failures[0].provider_name == "google_books"
 
 
 def test_research_service_preserves_query_level_traceability_for_deduped_source_items(

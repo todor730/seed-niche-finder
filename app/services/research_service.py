@@ -32,8 +32,9 @@ from app.db.models import (
 from app.db.repositories.source_item_query_links import SourceItemQueryLinkRepository
 from app.db.repositories.source_items import SourceItemRepository
 from app.db.repositories.source_queries import SourceQueryRepository
+from app.db.repositories.provider_failures import ProviderFailureRepository
 from app.schemas.evidence import SourceItemCreate, SourceItemStatus
-from app.schemas.evidence import SourceItemQueryLinkCreate, SourceQueryCreate
+from app.schemas.evidence import ProviderFailureCreate, SourceItemQueryLinkCreate, SourceQueryCreate
 from app.schemas.research import CancelRunData, CreateResearchRunRequest, ResearchProgress
 from app.services.providers import (
     BookSignal,
@@ -233,6 +234,18 @@ class ResearchService:
             if run is None:
                 raise RunNotFoundError(str(run_id))
 
+            persisted_failures = self._persist_provider_failures(session=session, run=run, batch=batch)
+            if persisted_failures:
+                logger.info(
+                    "Provider failures persisted.",
+                    extra={
+                        "run_id": str(run.id),
+                        "seed_niche": run.seed_niche,
+                        "stage": "provider_failures_persisted",
+                        "failure_count": len(persisted_failures),
+                        "providers_with_failures": sorted({failure.provider_name for failure in persisted_failures}),
+                    },
+                )
             persisted_source_items = self._persist_raw_evidence(session=session, run=run, batch=batch)
             logger.info(
                 "Raw evidence persisted.",
@@ -358,6 +371,33 @@ class ResearchService:
         session.commit()
         session.refresh(run)
         return run
+
+    def _persist_provider_failures(
+        self,
+        *,
+        session: Session,
+        run: ResearchRun,
+        batch: ProviderSearchBatchResult,
+    ):
+        """Persist provider failure records for the current run."""
+        if not batch.failures:
+            return []
+        repository = ProviderFailureRepository(session)
+        return repository.bulk_create(
+            [
+                ProviderFailureCreate(
+                    run_id=run.id,
+                    provider_name=failure.provider_name,
+                    query_text=failure.query.text,
+                    query_kind=failure.query.kind,
+                    error_type=failure.error_type,
+                    message=failure.message,
+                    retryable=failure.retryable,
+                    occurred_at=failure.occurred_at,
+                )
+                for failure in batch.failures
+            ]
+        )
 
     def _persist_raw_evidence(
         self,

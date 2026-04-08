@@ -8,6 +8,7 @@ from app.db.models.keyword_metrics import KeywordMetrics, KeywordMetricsStatus
 from app.db.models.niche_hypothesis import NicheHypothesis, NicheHypothesisStatus
 from app.db.models.niche_score import NicheScore
 from app.db.models.opportunity import Opportunity, OpportunityStatus
+from app.db.models.provider_failure import ProviderFailureRecord
 from app.db.models.research_run import ResearchRun, ResearchRunStatus
 from app.db.models.signal_cluster import SignalCluster
 from app.db.models.source_item import SourceItem, SourceItemStatus
@@ -31,6 +32,7 @@ __all__ = [
     "NicheScore",
     "Opportunity",
     "OpportunityStatus",
+    "ProviderFailureRecord",
     "ResearchRun",
     "ResearchRunStatus",
     "SignalCluster",

@@ -98,6 +98,10 @@ class ResearchRun(Base):
         back_populates="research_run",
         cascade="all, delete-orphan",
     )
+    provider_failures: Mapped[list["ProviderFailureRecord"]] = relationship(
+        back_populates="research_run",
+        cascade="all, delete-orphan",
+    )
     extracted_signals: Mapped[list["ExtractedSignal"]] = relationship(
         back_populates="research_run",
         cascade="all, delete-orphan",

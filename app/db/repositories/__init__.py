@@ -21,6 +21,7 @@ class PageResult(Generic[T]):
 from app.db.repositories.extracted_signals import ExtractedSignalListFilters, ExtractedSignalRepository
 from app.db.repositories.niche_hypotheses import NicheHypothesisListFilters, NicheHypothesisRepository
 from app.db.repositories.niche_scores import NicheScoreListFilters, NicheScoreRepository
+from app.db.repositories.provider_failures import ProviderFailureRepository
 from app.db.repositories.signal_clusters import SignalClusterListFilters, SignalClusterRepository
 from app.db.repositories.source_items import SourceItemListFilters, SourceItemRepository
 from app.db.repositories.source_item_query_links import SourceItemQueryLinkRepository
@@ -34,6 +35,7 @@ __all__ = [
     "NicheScoreListFilters",
     "NicheScoreRepository",
     "PageResult",
+    "ProviderFailureRepository",
     "SignalClusterListFilters",
     "SignalClusterRepository",
     "SourceItemListFilters",
