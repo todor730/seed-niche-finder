@@ -59,9 +59,13 @@ def test_list_runs_returns_correct_totals_and_precomputed_summaries(
     listed_by_id = {item.id: item for item in listed.items}
     assert listed_by_id[UUID(str(first_run.id))].summary.keyword_count >= 1
     assert listed_by_id[UUID(str(first_run.id))].summary.opportunity_count >= 1
+    assert listed_by_id[UUID(str(first_run.id))].depth_score is not None
+    assert listed_by_id[UUID(str(first_run.id))].depth_score.score > 0.0
     no_evidence_item = next(item for item in listed.items if getattr(item.status, "value", item.status) == "completed_no_evidence")
     assert no_evidence_item.summary.keyword_count == 0
     assert no_evidence_item.summary.opportunity_count == 0
+    assert no_evidence_item.depth_score is not None
+    assert no_evidence_item.depth_score.score == 0.0
     assert completed_only.total == 1
     assert len(completed_only.items) == 1
     assert completed_only.items[0].id == first_run.id

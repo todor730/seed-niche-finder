@@ -1,6 +1,7 @@
 """Application service layer."""
 
 from app.services.clustering import ClusteringService
+from app.services.depth_score import DepthScoreService, calculate_depth_score
 from app.services.extraction import RuleBasedExtractionService
 from app.services.export_service import ExportService
 from app.services.hypotheses import NicheHypothesisService
@@ -14,6 +15,7 @@ from app.services.summary_service import SummaryService
 __all__ = [
     "BasePlaywrightMarketplaceAdapter",
     "ClusteringService",
+    "DepthScoreService",
     "ExportService",
     "HypothesisRankingService",
     "KeywordService",
@@ -24,4 +26,5 @@ __all__ = [
     "ResearchService",
     "RuleBasedExtractionService",
     "SummaryService",
+    "calculate_depth_score",
 ]

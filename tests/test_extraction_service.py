@@ -149,6 +149,30 @@ def test_rule_based_extraction_deduplicates_repeated_matches_per_item(session_fa
     assert dark_romance_signals[0].confidence > 0.95
 
 
+def test_rule_based_extraction_rejects_noisy_pattern_captures(session_factory) -> None:
+    extractor = RuleBasedExtractionService()
+
+    with session_factory() as session:
+        run = _make_run(session)
+        source_item = _make_source_item(
+            session,
+            run_id=run.id,
+            title="Stress Guide",
+            subtitle="A guide for easy navigation",
+            description="This guide helps you create momentum and is perfect for easy navigation.",
+            categories=["Self Help", "Stress", "Guide"],
+        )
+
+        signals = extractor.extract_and_persist(session=session, source_items=[source_item])
+
+    signal_lookup = {(signal.signal_type, signal.normalized_value) for signal in signals}
+
+    assert ("problem_angle", "stress") in signal_lookup
+    assert ("solution_angle", "guide") in signal_lookup
+    assert ("audience", "easy navigation") not in signal_lookup
+    assert ("promise", "creating momentum") not in signal_lookup
+
+
 def test_rule_based_extraction_uses_semantic_normalization_for_duplicate_variants(session_factory) -> None:
     extractor = RuleBasedExtractionService()
 

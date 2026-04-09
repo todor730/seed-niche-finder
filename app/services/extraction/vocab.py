@@ -14,17 +14,66 @@ GENERIC_AUDIENCE_VALUES = {
     "book lovers",
 }
 
+_AUDIENCE_ANCHOR_TOKENS = {
+    "adults",
+    "beginners",
+    "caregivers",
+    "couples",
+    "creatives",
+    "entrepreneurs",
+    "leaders",
+    "men",
+    "moms",
+    "mothers",
+    "parents",
+    "professionals",
+    "students",
+    "teens",
+    "women",
+    "workers",
+    "ya",
+}
+_GENERIC_PROMISE_VALUES = {
+    "creating momentum",
+    "easy navigation",
+    "inner peace",
+    "positive change",
+}
+_PROMISE_ACTION_TOKENS = {
+    "build",
+    "create",
+    "find",
+    "heal",
+    "improve",
+    "manage",
+    "overcome",
+    "reduce",
+    "reset",
+    "stop",
+    "strengthen",
+}
+
 
 def _clean_audience_capture(value: str) -> str | None:
     cleaned = clean_capture(value, max_words=8)
     if not cleaned:
         return None
-    return None if cleaned.lower() in GENERIC_AUDIENCE_VALUES else cleaned
+    normalized = cleaned.lower()
+    if normalized in GENERIC_AUDIENCE_VALUES:
+        return None
+    if not set(normalized.split()).intersection(_AUDIENCE_ANCHOR_TOKENS):
+        return None
+    return cleaned
 
 
 def _clean_promise_capture(value: str) -> str | None:
     cleaned = clean_capture(value, max_words=10)
     if not cleaned or len(cleaned.split()) < 2:
+        return None
+    normalized = cleaned.lower()
+    if normalized in _GENERIC_PROMISE_VALUES:
+        return None
+    if not set(normalized.split()).intersection(_PROMISE_ACTION_TOKENS):
         return None
     return cleaned
 
@@ -79,6 +128,8 @@ KEYWORD_SIGNAL_RULES: dict[SupportedSignalType, tuple[KeywordRule, ...]] = {
         KeywordRule("beginners", allowed_fields=("subtitle", "description", "category")),
         KeywordRule("busy professionals", allowed_fields=("subtitle", "description")),
         KeywordRule("women over 40", allowed_fields=("subtitle", "description", "category")),
+        KeywordRule("women", allowed_fields=("title", "subtitle", "description", "category")),
+        KeywordRule("men", allowed_fields=("title", "subtitle", "description", "category")),
         KeywordRule("entrepreneurs", allowed_fields=("subtitle", "description", "category")),
         KeywordRule("moms", allowed_fields=("subtitle", "description", "category")),
         KeywordRule("couples", allowed_fields=("subtitle", "description", "category")),
@@ -116,6 +167,11 @@ KEYWORD_SIGNAL_RULES: dict[SupportedSignalType, tuple[KeywordRule, ...]] = {
     SupportedSignalType.PROBLEM_ANGLE: (
         KeywordRule("burnout", allowed_fields=("title", "subtitle", "description", "category")),
         KeywordRule("anxiety", allowed_fields=("title", "subtitle", "description", "category")),
+        KeywordRule("codependency", allowed_fields=("title", "subtitle", "description", "category")),
+        KeywordRule("confidence", allowed_fields=("title", "subtitle", "description", "category")),
+        KeywordRule("self confidence", allowed_fields=("title", "subtitle", "description", "category")),
+        KeywordRule("self esteem", allowed_fields=("title", "subtitle", "description", "category")),
+        KeywordRule("depression", allowed_fields=("title", "subtitle", "description", "category")),
         KeywordRule("procrastination", allowed_fields=("title", "subtitle", "description", "category")),
         KeywordRule("heartbreak", allowed_fields=("title", "subtitle", "description")),
         KeywordRule("grief", allowed_fields=("title", "subtitle", "description")),

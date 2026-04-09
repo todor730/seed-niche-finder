@@ -8,7 +8,7 @@ import logging
 from uuid import UUID
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from app.api.dependencies import CurrentUser
 from app.core.errors import RunNotFoundError
@@ -21,6 +21,7 @@ from app.db.models import (
     KeywordMetrics,
     KeywordMetricsStatus,
     NicheHypothesis,
+    NicheHypothesisStatus,
     Opportunity,
     OpportunityStatus,
     ResearchRun,
@@ -43,6 +44,7 @@ from app.services.providers import (
     build_book_signal,
     build_enabled_providers,
 )
+from app.services.depth_score import DepthScoreService
 from app.services.clustering import ClusteringService
 from app.services.extraction import RuleBasedExtractionService
 from app.services.hypotheses import NicheHypothesisService
@@ -50,12 +52,14 @@ from app.services.ranking import KeywordBlueprint, build_keyword_blueprints
 from app.services.scoring import HypothesisRankingService
 from app.services.shared import (
     ListResult,
+    build_progress,
     build_summaries,
     ensure_user,
     resolve_user_id,
+    to_depth_score_snapshot,
     to_research_run,
     to_research_run_details,
-    to_research_run_list_item_with_summary,
+    to_research_run_list_item_with_context,
 )
 
 logger = logging.getLogger(__name__)
@@ -74,6 +78,7 @@ class ResearchService:
         clustering_service: ClusteringService | None = None,
         hypothesis_service: NicheHypothesisService | None = None,
         ranking_service: HypothesisRankingService | None = None,
+        depth_score_service: DepthScoreService | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._provider_registry = provider_registry or ProviderRegistry(build_enabled_providers(("google_books", "open_library")))
@@ -81,6 +86,7 @@ class ResearchService:
         self._clustering_service = clustering_service or ClusteringService()
         self._hypothesis_service = hypothesis_service or NicheHypothesisService()
         self._ranking_service = ranking_service or HypothesisRankingService()
+        self._depth_score_service = depth_score_service or DepthScoreService()
 
     def create_run(self, *, current_user: CurrentUser, payload: CreateResearchRunRequest):
         """Persist a research run and execute the synchronous local research pipeline."""
@@ -134,7 +140,12 @@ class ResearchService:
                     "status": completed_run.status.value,
                 },
             )
-            return to_research_run(completed_run)
+            with self._session_factory() as session:
+                persisted_run = self._load_owned_run(session, current_user, completed_run.id)
+                depth_score = to_depth_score_snapshot(
+                    self._depth_score_service.calculate_for_run(session=session, run=persisted_run)
+                )
+                return to_research_run(persisted_run, depth_score=depth_score)
         except Exception as exc:
             self._mark_run_failed(run_id=research_run.id, message=str(exc))
             logger.exception(
@@ -170,8 +181,16 @@ class ResearchService:
             runs = list(session.scalars(statement))
             total = int(session.scalar(count_statement) or 0)
             summaries = build_summaries(session, [run.id for run in runs])
+            depth_scores = {
+                run_id: to_depth_score_snapshot(result)
+                for run_id, result in self._depth_score_service.calculate_for_runs(session=session, runs=runs).items()
+            }
             items = [
-                to_research_run_list_item_with_summary(run, summaries.get(run.id, ResearchRunSummary()))
+                to_research_run_list_item_with_context(
+                    run,
+                    summary=summaries.get(run.id, ResearchRunSummary()),
+                    depth_score=depth_scores.get(run.id),
+                )
                 for run in runs
             ]
             return ListResult(items=items, total=total, limit=limit, offset=offset)
@@ -180,13 +199,17 @@ class ResearchService:
         """Return a persisted research run detail payload."""
         with self._session_factory() as session:
             run = self._load_owned_run(session, current_user, run_id)
-            return to_research_run_details(session, run)
+            summary = build_summaries(session, [run.id]).get(run.id, ResearchRunSummary())
+            progress = build_progress(run, summary)
+            depth_score = to_depth_score_snapshot(self._depth_score_service.calculate_for_run(session=session, run=run))
+            return to_research_run_details(run, summary=summary, progress=progress, depth_score=depth_score)
 
     def get_progress(self, *, current_user: CurrentUser, run_id: UUID) -> ResearchProgress:
         """Return the derived progress payload for a research run."""
         with self._session_factory() as session:
             run = self._load_owned_run(session, current_user, run_id)
-            return to_research_run_details(session, run).progress
+            summary = build_summaries(session, [run.id]).get(run.id, ResearchRunSummary())
+            return build_progress(run, summary)
 
     def cancel_run(self, *, current_user: CurrentUser, run_id: UUID) -> CancelRunData:
         """Mark a run as cancelled when it still exists."""
@@ -305,6 +328,22 @@ class ResearchService:
                     "ranked_hypothesis_count": len(ranked_hypotheses),
                 },
             )
+            depth_score_result = self._depth_score_service.calculate_for_run(session=session, run=run)
+            logger.info(
+                "Run depth score calculated.",
+                extra={
+                    "run_id": str(run.id),
+                    "seed_niche": run.seed_niche,
+                    "stage": "run_depth_scored",
+                    "depth_score": depth_score_result.score,
+                    "source_queries_count": depth_score_result.metrics.source_queries_count,
+                    "source_items_count": depth_score_result.metrics.source_items_count,
+                    "extracted_signals_count": depth_score_result.metrics.extracted_signals_count,
+                    "signal_clusters_count": depth_score_result.metrics.signal_clusters_count,
+                    "niche_hypotheses_count": depth_score_result.metrics.niche_hypotheses_count,
+                    "provider_failures_count": depth_score_result.metrics.provider_failures_count,
+                },
+            )
             if not persisted_source_items:
                 return self._complete_run_without_evidence(
                     session=session,
@@ -321,11 +360,18 @@ class ResearchService:
                 )
 
             book_signals = self._source_items_to_book_signals(persisted_source_items)
-            keyword_blueprints = self._build_keyword_blueprints(
-                seed_niche=payload.seed_niche,
+            keyword_blueprints = self._build_evidence_backed_keyword_blueprints(
+                session=session,
+                run=run,
                 max_candidates=payload.config.max_candidates,
-                book_signals=book_signals,
             )
+            if not keyword_blueprints:
+                return self._complete_run_without_evidence(
+                    session=session,
+                    run=run,
+                    reason="Persisted evidence did not produce any sufficiently specific niche opportunities.",
+                    detail="no_materializable_hypotheses",
+                )
             logger.info(
                 "Keyword blueprints built from persisted evidence.",
                 extra={
@@ -562,8 +608,136 @@ class ResearchService:
             run.completed_at = datetime.now(UTC)
             session.commit()
 
-    def _build_keyword_blueprints(self, *, seed_niche: str, max_candidates: int, book_signals: list[BookSignal]) -> list[KeywordBlueprint]:
-        return build_keyword_blueprints(seed_niche, book_signals, max_candidates)
+    def _build_evidence_backed_keyword_blueprints(
+        self,
+        *,
+        session: Session,
+        run: ResearchRun,
+        max_candidates: int,
+    ) -> list[KeywordBlueprint]:
+        session.flush()
+        session.expire_all()
+        ranked_hypotheses = list(
+            session.scalars(
+                select(NicheHypothesis)
+                .where(NicheHypothesis.run_id == run.id, NicheHypothesis.overall_score.is_not(None))
+                .options(selectinload(NicheHypothesis.niche_scores), selectinload(NicheHypothesis.primary_signal_cluster))
+                .order_by(NicheHypothesis.rank_position.asc(), NicheHypothesis.hypothesis_label.asc())
+            )
+        )
+
+        blueprints: list[KeywordBlueprint] = []
+        for hypothesis in ranked_hypotheses:
+            blueprint = self._keyword_blueprint_from_hypothesis(run=run, hypothesis=hypothesis)
+            if blueprint is not None:
+                blueprints.append(blueprint)
+
+        if blueprints:
+            return blueprints[:max_candidates]
+
+        if not ranked_hypotheses:
+            book_signals = self._source_items_to_book_signals(
+                list(session.scalars(select(SourceItem).where(SourceItem.run_id == run.id)))
+            )
+            return build_keyword_blueprints(run.seed_niche, book_signals, max_candidates)
+        return []
+
+    def _keyword_blueprint_from_hypothesis(
+        self,
+        *,
+        run: ResearchRun,
+        hypothesis: NicheHypothesis,
+    ) -> KeywordBlueprint | None:
+        score_map = {score.score_type: score for score in hypothesis.niche_scores}
+        final_score = score_map.get("final_score")
+        discovery_score = score_map.get("discovery_score")
+        opportunity_score = score_map.get("opportunity_score")
+        competition_score = score_map.get("competition_score")
+        confidence_score = score_map.get("confidence_score")
+        if final_score is None or discovery_score is None or opportunity_score is None or competition_score is None:
+            return None
+
+        rationale = dict(hypothesis.rationale_json or {})
+        components = [component for component in rationale.get("components", []) if isinstance(component, dict)]
+        component_by_type = {
+            str(component.get("signal_type")): component
+            for component in components
+            if component.get("signal_type")
+        }
+        primary_type = str(components[0].get("signal_type")) if components else ""
+        solution_label = str(component_by_type.get("solution_angle", {}).get("label", ""))
+        audience_label = str(component_by_type.get("audience", {}).get("label", ""))
+        promise_label = str(component_by_type.get("promise", {}).get("label", ""))
+
+        if primary_type == "problem_angle":
+            if not solution_label:
+                return None
+            if solution_label in {"guide", "system", "plan", "method"} and not audience_label and not promise_label:
+                return None
+
+        demand_score = round(discovery_score.score_value, 1)
+        trend_score = round((opportunity_score.score_value * 0.55) + (final_score.score_value * 0.25) + 10.0, 1)
+        intent_score = round((opportunity_score.score_value * 0.6) + (discovery_score.score_value * 0.2), 1)
+        hook_score = round(opportunity_score.score_value, 1)
+        confidence_value = confidence_score.score_value if confidence_score is not None else 50.0
+        monetization_score = round((final_score.score_value * 0.4) + (confidence_value * 0.3), 1)
+
+        positives = [
+            f"Evidence-backed niche hypothesis around {hypothesis.hypothesis_label}.",
+            f"Supported by {max(1, hypothesis.source_count)} provider sources and {max(1, hypothesis.evidence_count)} source items.",
+        ]
+        if audience_label:
+            positives.append(f"Audience is explicit through {audience_label}.")
+        if promise_label:
+            positives.append(f"Promise signal is explicit through {promise_label}.")
+        if solution_label:
+            positives.append(f"Format/solution angle is explicit through {solution_label}.")
+
+        risks: list[str] = []
+        if not audience_label:
+            risks.append("Audience specificity is still limited, so positioning should be validated before launch.")
+        if competition_score.score_value >= 65:
+            risks.append("Competition is high, so differentiation in title, angle, or audience is necessary.")
+        if confidence_value < 60:
+            risks.append("Confidence is moderate, so validate demand with another marketplace before scaling.")
+        if not risks:
+            risks.append("Still needs cover, blurb, and audience-angle validation before launch.")
+
+        if audience_label:
+            landing_page_angles = [
+                f"A focused ebook for {audience_label} built around {hypothesis.hypothesis_label}.",
+                f"A promise-led landing page that explains why {hypothesis.hypothesis_label} matters specifically for {audience_label}.",
+            ]
+        elif promise_label:
+            landing_page_angles = [
+                f"An outcome-led ebook positioned around {hypothesis.hypothesis_label}.",
+                f"A validation page that tests whether readers buy {hypothesis.hypothesis_label} for {promise_label}.",
+            ]
+        else:
+            landing_page_angles = [
+                f"A focused ebook built around {hypothesis.hypothesis_label}.",
+                f"A landing page that tests whether {hypothesis.hypothesis_label} is specific enough to convert as a niche offer.",
+            ]
+
+        return KeywordBlueprint(
+            keyword_text=hypothesis.hypothesis_label,
+            summary=hypothesis.summary or f"{hypothesis.hypothesis_label.title()} shows evidence-backed ebook potential inside {run.seed_niche}.",
+            demand_score=min(100.0, demand_score),
+            trend_score=min(100.0, trend_score),
+            intent_score=min(100.0, intent_score),
+            hook_score=min(100.0, hook_score),
+            monetization_score=min(100.0, monetization_score),
+            competition_score=round(competition_score.score_value, 1),
+            seasonality_score=46.0,
+            cpc_usd=round(0.85 + opportunity_score.score_value / 85.0, 2),
+            positives=positives,
+            risks=risks,
+            landing_page_angles=landing_page_angles,
+            evidence_count=hypothesis.evidence_count,
+            provider_coverage=hypothesis.source_count,
+            average_rating=None,
+            review_count=None,
+        )
 
     def _materialize_pipeline(
         self,

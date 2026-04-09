@@ -50,6 +50,35 @@ class ResearchRunSummary(SchemaModel):
         return self
 
 
+class DepthScoreBreakdown(SchemaModel):
+    """Explainable factor scores behind the run depth score."""
+
+    query_breadth: float = Field(ge=0.0, le=100.0)
+    provider_coverage: float = Field(ge=0.0, le=100.0)
+    evidence_volume: float = Field(ge=0.0, le=100.0)
+    signal_depth: float = Field(ge=0.0, le=100.0)
+    cluster_diversity: float = Field(ge=0.0, le=100.0)
+    hypothesis_support: float = Field(ge=0.0, le=100.0)
+    failure_adjustment: float = Field(ge=0.0, le=20.0)
+    query_success_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class DepthScoreSnapshot(SchemaModel):
+    """Explainable run-level depth score and the persisted metrics behind it."""
+
+    score: float = Field(ge=0.0, le=100.0)
+    source_queries_count: int = Field(ge=0)
+    successful_queries_count: int = Field(ge=0)
+    attempted_queries_count: int = Field(ge=0)
+    source_items_count: int = Field(ge=0)
+    extracted_signals_count: int = Field(ge=0)
+    signal_clusters_count: int = Field(ge=0)
+    niche_hypotheses_count: int = Field(ge=0)
+    provider_failures_count: int = Field(ge=0)
+    evidence_provider_count: int = Field(ge=0)
+    breakdown: DepthScoreBreakdown
+
+
 class ResearchProgress(SchemaModel):
     """Progress snapshot for a running or completed research run."""
 
@@ -86,6 +115,7 @@ class ResearchRun(SchemaModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     error_message: str | None = None
+    depth_score: DepthScoreSnapshot | None = None
 
 
 class ResearchRunListItem(ResearchRun):
@@ -150,6 +180,28 @@ RESEARCH_RUN_DETAILS_EXAMPLE: dict[str, Any] = {
     "started_at": "2026-04-08T10:00:10Z",
     "completed_at": None,
     "error_message": None,
+    "depth_score": {
+        "score": 74.5,
+        "source_queries_count": 8,
+        "successful_queries_count": 7,
+        "attempted_queries_count": 8,
+        "source_items_count": 14,
+        "extracted_signals_count": 41,
+        "signal_clusters_count": 11,
+        "niche_hypotheses_count": 5,
+        "provider_failures_count": 1,
+        "evidence_provider_count": 2,
+        "breakdown": {
+            "query_breadth": 96.2,
+            "provider_coverage": 100.0,
+            "evidence_volume": 100.0,
+            "signal_depth": 89.1,
+            "cluster_diversity": 92.3,
+            "hypothesis_support": 77.4,
+            "failure_adjustment": 6.9,
+            "query_success_rate": 0.88,
+        },
+    },
     "summary": {
         "keyword_count": 48,
         "accepted_keyword_count": 12,

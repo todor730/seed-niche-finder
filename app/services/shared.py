@@ -16,6 +16,8 @@ from app.schemas.export import ExportResource
 from app.schemas.keyword import KeywordDetails, KeywordListItem, KeywordMetrics as KeywordMetricsSchema
 from app.schemas.opportunity import MarketSnapshot, OpportunityDetails, OpportunityListItem, OpportunityRationale, ScoreBreakdown
 from app.schemas.research import (
+    DepthScoreBreakdown,
+    DepthScoreSnapshot,
     ResearchConfig,
     ResearchProgress,
     ResearchRun as ResearchRunSchema,
@@ -24,6 +26,7 @@ from app.schemas.research import (
     ResearchRunStatus,
     ResearchRunSummary,
 )
+from app.services.depth_score import DepthScoreResult
 
 T = TypeVar("T")
 
@@ -183,7 +186,37 @@ def build_progress(run: ResearchRun, summary: ResearchRunSummary) -> ResearchPro
     )
 
 
-def to_research_run(run: ResearchRun) -> ResearchRunSchema:
+def to_depth_score_snapshot(result: DepthScoreResult) -> DepthScoreSnapshot:
+    """Map a runtime depth-score result into the API schema."""
+    return DepthScoreSnapshot(
+        score=result.score,
+        source_queries_count=result.metrics.source_queries_count,
+        successful_queries_count=result.metrics.successful_queries_count,
+        attempted_queries_count=result.metrics.attempted_queries_count,
+        source_items_count=result.metrics.source_items_count,
+        extracted_signals_count=result.metrics.extracted_signals_count,
+        signal_clusters_count=result.metrics.signal_clusters_count,
+        niche_hypotheses_count=result.metrics.niche_hypotheses_count,
+        provider_failures_count=result.metrics.provider_failures_count,
+        evidence_provider_count=result.metrics.evidence_provider_count,
+        breakdown=DepthScoreBreakdown(
+            query_breadth=result.query_breadth,
+            provider_coverage=result.provider_coverage,
+            evidence_volume=result.evidence_volume,
+            signal_depth=result.signal_depth,
+            cluster_diversity=result.cluster_diversity,
+            hypothesis_support=result.hypothesis_support,
+            failure_adjustment=result.failure_adjustment,
+            query_success_rate=(
+                round(result.metrics.query_success_rate, 4)
+                if result.metrics.query_success_rate is not None
+                else None
+            ),
+        ),
+    )
+
+
+def to_research_run(run: ResearchRun, *, depth_score: DepthScoreSnapshot | None = None) -> ResearchRunSchema:
     """Map a research run ORM record to the base API schema."""
     return ResearchRunSchema(
         id=run.id,
@@ -196,6 +229,7 @@ def to_research_run(run: ResearchRun) -> ResearchRunSchema:
         started_at=run.started_at,
         completed_at=run.completed_at,
         error_message=run.error_message,
+        depth_score=depth_score,
     )
 
 
@@ -215,13 +249,31 @@ def to_research_run_list_item_with_summary(run: ResearchRun, summary: ResearchRu
     )
 
 
-def to_research_run_details(session: Session, run: ResearchRun) -> ResearchRunDetails:
-    """Map a research run ORM record to the detailed API schema."""
-    summary = build_summary(session, run.id)
-    return ResearchRunDetails(
-        **to_research_run(run).model_dump(),
+def to_research_run_list_item_with_context(
+    run: ResearchRun,
+    *,
+    summary: ResearchRunSummary,
+    depth_score: DepthScoreSnapshot | None = None,
+) -> ResearchRunListItem:
+    """Map a research run ORM record to the list-item API schema with precomputed context."""
+    return ResearchRunListItem(
+        **to_research_run(run, depth_score=depth_score).model_dump(),
         summary=summary,
-        progress=build_progress(run, summary),
+    )
+
+
+def to_research_run_details(
+    run: ResearchRun,
+    *,
+    summary: ResearchRunSummary,
+    progress: ResearchProgress,
+    depth_score: DepthScoreSnapshot | None = None,
+) -> ResearchRunDetails:
+    """Map a research run ORM record to the detailed API schema with precomputed context."""
+    return ResearchRunDetails(
+        **to_research_run(run, depth_score=depth_score).model_dump(),
+        summary=summary,
+        progress=progress,
     )
 
 

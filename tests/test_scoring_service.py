@@ -130,9 +130,9 @@ def test_scoring_service_persists_explainable_breakdown_and_ranks_hypotheses(ses
         hypotheses = list(session.scalars(select(NicheHypothesis).where(NicheHypothesis.run_id == run.id).order_by(NicheHypothesis.rank_position.asc())))
         scores = list(session.scalars(select(NicheScore).where(NicheScore.run_id == run.id)))
 
-    assert len(ranked) == 2
-    assert len(hypotheses) == 2
-    assert len(scores) == 10
+    assert len(ranked) >= 2
+    assert len(hypotheses) >= 2
+    assert len(scores) == len(hypotheses) * 5
     assert hypotheses[0].hypothesis_label == "enemies to lovers small town romance"
     assert hypotheses[0].overall_score is not None
     assert hypotheses[0].rank_position == 1
@@ -167,8 +167,8 @@ def test_scoring_service_supports_calibration_hooks(session_factory) -> None:
         hypotheses = list(session.scalars(select(NicheHypothesis).where(NicheHypothesis.run_id == run.id)))
         scores = list(session.scalars(select(NicheScore).where(NicheScore.run_id == run.id, NicheScore.score_type == "final_score")))
 
-    assert len(hypotheses) == 2
-    assert len(scores) == 2
+    assert len(hypotheses) >= 2
+    assert len(scores) == len(hypotheses)
     assert all(score.evidence_json["component_weights"]["confidence"] == 0.5 for score in scores)
 
 

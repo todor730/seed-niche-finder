@@ -9,6 +9,7 @@ from uuid import UUID
 from pydantic import Field, field_validator
 
 from app.schemas.common import SchemaModel
+from app.schemas.research import DepthScoreSnapshot
 
 
 class SummaryScoreBreakdown(SchemaModel):
@@ -136,4 +137,5 @@ class RunSummaryReport(SchemaModel):
     run_id: UUID
     seed_niche: str = Field(min_length=1)
     generated_at: datetime
+    depth_score: DepthScoreSnapshot
     top_niche_opportunities: list[NicheOpportunitySummary] = Field(default_factory=list)

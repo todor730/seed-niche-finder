@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import math
 import re
@@ -31,6 +31,16 @@ class KeywordBlueprint:
     provider_coverage: int = 0
     average_rating: float | None = None
     review_count: int | None = None
+
+
+@dataclass(slots=True)
+class PhraseEvidence:
+    """Evidence collected for a candidate phrase before blueprint generation."""
+
+    total_count: int = 0
+    title_count: int = 0
+    category_count: int = 0
+    provider_sources: set[str] = field(default_factory=set)
 
 
 ROMANCE_DISCOVERY_TERMS: tuple[str, ...] = (
@@ -75,18 +85,85 @@ TROPE_BOOSTS: dict[str, float] = {
     "billionaire": 6.0,
 }
 
+_GENERIC_MARKET_TERMS = {
+    "best",
+    "bestseller",
+    "bestsellers",
+    "book",
+    "books",
+    "fiction",
+    "greatest",
+    "guide",
+    "handbook",
+    "kindle",
+    "manual",
+    "novel",
+    "novels",
+}
+_STOPWORDS = {"a", "an", "and", "for", "in", "of", "the", "to", "your"}
+_AUDIENCE_TERMS = {
+    "adults",
+    "beginners",
+    "busy professionals",
+    "children",
+    "creatives",
+    "entrepreneurs",
+    "men",
+    "mothers",
+    "parents",
+    "professionals",
+    "students",
+    "teens",
+    "women",
+}
+_PAIN_TERMS = {
+    "anxiety",
+    "burnout",
+    "confidence",
+    "depression",
+    "esteem",
+    "focus",
+    "grief",
+    "habits",
+    "overthinking",
+    "procrastination",
+    "recovery",
+    "sleep",
+    "stress",
+    "trauma",
+}
+_PROMISE_TERMS = {
+    "build",
+    "clarity",
+    "discipline",
+    "heal",
+    "healing",
+    "improve",
+    "overcome",
+    "recovery",
+    "reset",
+    "transform",
+}
+_FORMAT_TERMS = {"guide", "handbook", "journal", "manual", "planner", "workbook"}
+
 
 def build_keyword_blueprints(seed_niche: str, book_signals: list[BookSignal], max_candidates: int) -> list[KeywordBlueprint]:
     """Build ranked keyword blueprints from signals and curated priors."""
-    candidate_phrases = _candidate_phrases(seed_niche, book_signals)[:max_candidates]
+    candidate_phrases = _candidate_phrases(seed_niche, book_signals)[: max_candidates * 3]
     blueprints = [_score_phrase(seed_niche, phrase, book_signals) for phrase in candidate_phrases]
+    blueprints = _dedupe_blueprints(seed_niche, blueprints)
     blueprints.sort(key=_ranking_value, reverse=True)
     return blueprints[:max_candidates]
 
 
 def _candidate_phrases(seed_niche: str, book_signals: list[BookSignal]) -> list[str]:
     normalized_seed = seed_niche.strip().lower()
-    phrase_counts: dict[str, int] = _phrase_counts_from_signals(normalized_seed, book_signals)
+    phrase_evidence = _phrase_evidence_from_signals(normalized_seed, book_signals)
+    phrase_counts = {
+        phrase: evidence.total_count
+        for phrase, evidence in phrase_evidence.items()
+        if not _reject_phrase(normalized_seed, phrase, evidence)
+    }
 
     if normalized_seed == "romance":
         for term in ROMANCE_DISCOVERY_TERMS:
@@ -105,27 +182,31 @@ def _candidate_phrases(seed_niche: str, book_signals: list[BookSignal]) -> list[
     if normalized_seed == "romance":
         return list(ROMANCE_FALLBACK_TERMS)
 
-    return [
-        normalized_seed,
-        f"{normalized_seed} for beginners",
-        f"{normalized_seed} workbook",
-        f"{normalized_seed} guide",
-        f"{normalized_seed} journal",
-    ]
+    return []
 
 
-def _phrase_counts_from_signals(normalized_seed: str, book_signals: list[BookSignal]) -> dict[str, int]:
-    phrase_counts: dict[str, int] = {}
+def _phrase_evidence_from_signals(normalized_seed: str, book_signals: list[BookSignal]) -> dict[str, PhraseEvidence]:
+    phrase_counts: dict[str, PhraseEvidence] = {}
     seed_tokens = set(_tokens(normalized_seed))
     for signal in book_signals:
-        for raw_phrase in [signal.title, *signal.categories]:
+        signal_fields = [signal.title, *signal.categories]
+        has_seed_context = any(_has_seed_context(normalized_seed, seed_tokens, value) for value in signal_fields)
+        for index, raw_phrase in enumerate(signal_fields):
             phrase = _normalize_phrase(raw_phrase)
             if not phrase or len(phrase.split()) > 5:
                 continue
             phrase_tokens = set(_tokens(phrase))
-            if seed_tokens and not seed_tokens.intersection(phrase_tokens):
+            if seed_tokens and not seed_tokens.intersection(phrase_tokens) and not (
+                has_seed_context and _specificity_strength(phrase) >= 2.0
+            ):
                 continue
-            phrase_counts[phrase] = phrase_counts.get(phrase, 0) + 1
+            evidence = phrase_counts.setdefault(phrase, PhraseEvidence())
+            evidence.total_count += 1
+            if index == 0:
+                evidence.title_count += 1
+            else:
+                evidence.category_count += 1
+            evidence.provider_sources.add(signal.source)
 
     return phrase_counts
 
@@ -137,13 +218,18 @@ def _score_phrase(seed_niche: str, phrase: str, book_signals: list[BookSignal]) 
     review_count = sum(signal.review_count or 0 for signal in matched_signals)
     ratings = [signal.average_rating for signal in matched_signals if signal.average_rating is not None]
     average_rating = round(sum(ratings) / len(ratings), 2) if ratings else None
+    specificity_strength = _specificity_strength(phrase)
+    generic_penalty = _generic_phrase_penalty(seed_niche, phrase)
 
     demand_score = min(100.0, 45.0 + math.log1p(review_count + evidence_count * 120) * 8.5 + provider_coverage * 4.0)
     trend_score = min(100.0, 48.0 + _recency_share(matched_signals) * 28.0 + provider_coverage * 3.0)
-    intent_score = min(100.0, 58.0 + _intent_score(phrase))
-    hook_score = min(100.0, 55.0 + _hook_score(phrase))
+    intent_score = min(100.0, 58.0 + _intent_score(phrase) + specificity_strength * 4.0 - generic_penalty * 0.3)
+    hook_score = min(100.0, 55.0 + _hook_score(phrase) + specificity_strength * 3.0 - generic_penalty * 0.2)
     monetization_score = min(100.0, 52.0 + _monetization_score(phrase, average_rating, review_count))
-    competition_score = min(100.0, 18.0 + math.log1p(review_count + evidence_count * 50) * 8.0 + _broadness_penalty(phrase))
+    competition_score = min(
+        100.0,
+        18.0 + math.log1p(review_count + evidence_count * 50) * 8.0 + _broadness_penalty(phrase) + generic_penalty * 0.5,
+    )
     seasonality_score = min(100.0, 35.0 + _seasonality_score(phrase))
     cpc_usd = round(0.85 + monetization_score / 80.0 + intent_score / 140.0, 2)
 
@@ -250,15 +336,34 @@ def _seasonality_score(phrase: str) -> float:
 
 
 def _summary_for_phrase(seed_niche: str, phrase: str, demand_score: float, trend_score: float, competition_score: float) -> str:
+    profile = _specificity_profile(phrase)
+    specificity_notes: list[str] = []
+    if profile["audience"]:
+        specificity_notes.append(f"audience {', '.join(profile['audience'])}")
+    if profile["pain"]:
+        specificity_notes.append(f"problem focus {', '.join(profile['pain'])}")
+    if profile["promise"]:
+        specificity_notes.append(f"outcome {', '.join(profile['promise'])}")
+    specificity_tail = ""
+    if specificity_notes:
+        specificity_tail = f" It signals {'; '.join(specificity_notes[:2])}."
     return (
-        f"{phrase.title()} shows strong ebook potential inside {seed_niche} with "
+        f"{phrase.title()} shows ebook potential inside {seed_niche} with "
         f"demand {round(demand_score, 1)}, trend {round(trend_score, 1)}, and "
-        f"competition {round(competition_score, 1)}."
+        f"competition {round(competition_score, 1)}.{specificity_tail}"
     )
 
 
 def _positives_for_phrase(phrase: str, provider_coverage: int, evidence_count: int) -> list[str]:
-    positives = [f"Specific positioning around {phrase}.", f"Backed by {max(1, provider_coverage)} provider sources and {max(1, evidence_count)} matching market signals."]
+    profile = _specificity_profile(phrase)
+    positives = [
+        f"Specific positioning around {phrase}.",
+        f"Backed by {max(1, provider_coverage)} provider sources and {max(1, evidence_count)} matching market signals.",
+    ]
+    if profile["audience"]:
+        positives.append(f"Audience signal is explicit through {', '.join(profile['audience'])}.")
+    if profile["pain"]:
+        positives.append(f"Problem-led positioning is clearer through {', '.join(profile['pain'])}.")
     if "romance" in phrase:
         positives.append("Reader intent is explicit and easy to message in ebook packaging.")
     return positives
@@ -266,6 +371,8 @@ def _positives_for_phrase(phrase: str, provider_coverage: int, evidence_count: i
 
 def _risks_for_phrase(phrase: str, competition_score: float, provider_coverage: int) -> list[str]:
     risks = []
+    if _specificity_strength(phrase) < 2.0:
+        risks.append("Specific audience, pain, or promise signals are weak, so niche fit may still be broad.")
     if competition_score >= 65:
         risks.append("Competition is high, so differentiation in title, angle, or audience is necessary.")
     if provider_coverage <= 1:
@@ -276,9 +383,22 @@ def _risks_for_phrase(phrase: str, competition_score: float, provider_coverage: 
 
 
 def _angles_for_phrase(phrase: str) -> list[str]:
+    profile = _specificity_profile(phrase)
+    if profile["audience"]:
+        audience = profile["audience"][0]
+        return [
+            f"A focused ebook for {audience} built around {phrase}.",
+            f"A promise-led landing page that shows why {phrase} matters specifically for {audience}.",
+        ]
+    if profile["pain"]:
+        pain = profile["pain"][0]
+        return [
+            f"A pain-to-outcome ebook positioned around {pain} inside {phrase}.",
+            f"A validation page that tests whether readers buy {phrase} as a solution to {pain}.",
+        ]
     return [
-        f"A fast, trope-first ebook built around {phrase}.",
-        f"Audience-specific promise that makes {phrase} feel more targeted and bingeable.",
+        f"A focused ebook built around {phrase}.",
+        f"A landing page that tests whether {phrase} is specific enough to convert as a niche offer.",
     ]
 
 
@@ -292,8 +412,129 @@ def _tokens(value: str) -> list[str]:
     return [token for token in _normalize_phrase(value).split() if token]
 
 
+def _has_seed_context(normalized_seed: str, seed_tokens: set[str], value: str) -> bool:
+    phrase = _normalize_phrase(value)
+    if not phrase:
+        return False
+    phrase_tokens = set(_tokens(phrase))
+    if phrase == normalized_seed:
+        return True
+    return bool(seed_tokens and seed_tokens.issubset(phrase_tokens))
+
+
+def _specificity_profile(phrase: str) -> dict[str, list[str]]:
+    normalized_phrase = _normalize_phrase(phrase)
+    phrase_tokens = set(_tokens(normalized_phrase))
+    profile = {
+        "audience": [],
+        "pain": [],
+        "promise": [],
+        "format": [],
+    }
+    for term in sorted(_AUDIENCE_TERMS):
+        if _term_matches_phrase(term, normalized_phrase, phrase_tokens):
+            profile["audience"].append(term)
+    for term in sorted(_PAIN_TERMS):
+        if _term_matches_phrase(term, normalized_phrase, phrase_tokens):
+            profile["pain"].append(term)
+    for term in sorted(_PROMISE_TERMS):
+        if _term_matches_phrase(term, normalized_phrase, phrase_tokens):
+            profile["promise"].append(term)
+    for term in sorted(_FORMAT_TERMS):
+        if _term_matches_phrase(term, normalized_phrase, phrase_tokens):
+            profile["format"].append(term)
+    return profile
+
+
+def _term_matches_phrase(term: str, normalized_phrase: str, phrase_tokens: set[str]) -> bool:
+    term_tokens = _tokens(term)
+    if len(term_tokens) == 1:
+        return term_tokens[0] in phrase_tokens
+    return term in normalized_phrase
+
+
+def _specificity_strength(phrase: str) -> float:
+    profile = _specificity_profile(phrase)
+    return (
+        len(profile["audience"]) * 1.5
+        + len(profile["pain"]) * 1.2
+        + len(profile["promise"]) * 1.0
+        + len(profile["format"]) * 0.6
+    )
+
+
+def _generic_phrase_penalty(seed_niche: str, phrase: str) -> float:
+    normalized_seed = _normalize_phrase(seed_niche)
+    phrase_tokens = _tokens(phrase)
+    seed_tokens = set(_tokens(normalized_seed))
+    remaining_tokens = [
+        token for token in phrase_tokens if token not in seed_tokens and token not in _STOPWORDS
+    ]
+    if not remaining_tokens:
+        return 28.0
+    if all(token in _GENERIC_MARKET_TERMS for token in remaining_tokens):
+        return 24.0
+    return 0.0
+
+
+def _reject_phrase(normalized_seed: str, phrase: str, evidence: PhraseEvidence) -> bool:
+    if _is_audience_only_fragment(phrase):
+        return True
+    if _is_exact_query_echo(normalized_seed, phrase):
+        return True
+    if _generic_phrase_penalty(normalized_seed, phrase) >= 20.0:
+        return True
+    if _is_title_artifact(phrase, evidence):
+        return True
+    if evidence.category_count == 0 and evidence.total_count <= 1 and len(evidence.provider_sources) <= 1:
+        if _specificity_strength(phrase) < 2.0:
+            return True
+    return False
+
+
+def _blueprint_dedupe_key(seed_niche: str, phrase: str) -> str:
+    seed_tokens = set(_tokens(seed_niche))
+    filtered_tokens = [
+        token
+        for token in _tokens(phrase)
+        if token not in seed_tokens and token not in _STOPWORDS and token not in _GENERIC_MARKET_TERMS
+    ]
+    if not filtered_tokens:
+        filtered_tokens = [token for token in _tokens(phrase) if token not in _STOPWORDS]
+    return " ".join(filtered_tokens)
+
+
+def _is_exact_query_echo(seed_niche: str, phrase: str) -> bool:
+    return _blueprint_dedupe_key(seed_niche, phrase) == ""
+
+
+def _is_title_artifact(phrase: str, evidence: PhraseEvidence) -> bool:
+    if evidence.title_count == 0:
+        return False
+    if evidence.category_count > 0:
+        return False
+    return _specificity_strength(phrase) < 2.0
+
+
+def _is_audience_only_fragment(phrase: str) -> bool:
+    profile = _specificity_profile(phrase)
+    return bool(profile["audience"]) and not profile["pain"] and not profile["promise"]
+
+
+def _dedupe_blueprints(seed_niche: str, blueprints: list[KeywordBlueprint]) -> list[KeywordBlueprint]:
+    deduped: dict[str, KeywordBlueprint] = {}
+    for blueprint in sorted(blueprints, key=_ranking_value, reverse=True):
+        key = _blueprint_dedupe_key(seed_niche, blueprint.keyword_text)
+        existing = deduped.get(key)
+        if existing is None or _ranking_value(blueprint) > _ranking_value(existing):
+            deduped[key] = blueprint
+    return list(deduped.values())
+
+
 def _ranking_value(item: KeywordBlueprint) -> float:
-    return round(
+    specificity_strength = _specificity_strength(item.keyword_text)
+    specificity_bonus = min(10.0, specificity_strength * 3.0)
+    base_score = round(
         item.demand_score * 0.24
         + item.trend_score * 0.14
         + item.intent_score * 0.16
@@ -304,3 +545,4 @@ def _ranking_value(item: KeywordBlueprint) -> float:
         + min(8.0, math.log1p(item.evidence_count) * 2.0),
         2,
     )
+    return round(base_score + specificity_bonus, 2)

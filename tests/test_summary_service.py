@@ -42,6 +42,8 @@ def test_summary_service_builds_decision_grade_report(
     assert isinstance(report, RunSummaryReport)
     assert report.run_id == run_id
     assert report.seed_niche == "romance"
+    assert report.depth_score.score > 0.0
+    assert report.depth_score.source_items_count >= 1
     assert report.top_niche_opportunities
 
     top_summary = report.top_niche_opportunities[0]
@@ -97,6 +99,7 @@ def test_full_run_json_export_includes_niche_summaries(
 
     assert exported_data
     assert exported_data[0]["seed_niche"] == "romance"
+    assert exported_data[0]["depth_score"]["score"] > 0.0
     assert exported_data[0]["niche_summaries"]
     first_summary = exported_data[0]["niche_summaries"][0]
     assert "niche_label" in first_summary

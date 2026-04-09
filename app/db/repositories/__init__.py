@@ -22,6 +22,7 @@ from app.db.repositories.extracted_signals import ExtractedSignalListFilters, Ex
 from app.db.repositories.niche_hypotheses import NicheHypothesisListFilters, NicheHypothesisRepository
 from app.db.repositories.niche_scores import NicheScoreListFilters, NicheScoreRepository
 from app.db.repositories.provider_failures import ProviderFailureRepository
+from app.db.repositories.research_run_depth import ResearchRunDepthMetrics, ResearchRunDepthRepository
 from app.db.repositories.signal_clusters import SignalClusterListFilters, SignalClusterRepository
 from app.db.repositories.source_items import SourceItemListFilters, SourceItemRepository
 from app.db.repositories.source_item_query_links import SourceItemQueryLinkRepository
@@ -36,6 +37,8 @@ __all__ = [
     "NicheScoreRepository",
     "PageResult",
     "ProviderFailureRepository",
+    "ResearchRunDepthMetrics",
+    "ResearchRunDepthRepository",
     "SignalClusterListFilters",
     "SignalClusterRepository",
     "SourceItemListFilters",

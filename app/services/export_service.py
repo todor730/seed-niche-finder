@@ -152,6 +152,15 @@ class ExportService:
                         "seed_niche": run.seed_niche,
                         "status": run.status.value,
                         "generated_at": summary_report.generated_at.isoformat(),
+                        "depth_score": summary_report.depth_score.score,
+                        "depth_query_success_rate": summary_report.depth_score.breakdown.query_success_rate,
+                        "depth_source_queries_count": summary_report.depth_score.source_queries_count,
+                        "depth_source_items_count": summary_report.depth_score.source_items_count,
+                        "depth_extracted_signals_count": summary_report.depth_score.extracted_signals_count,
+                        "depth_signal_clusters_count": summary_report.depth_score.signal_clusters_count,
+                        "depth_niche_hypotheses_count": summary_report.depth_score.niche_hypotheses_count,
+                        "depth_provider_failures_count": summary_report.depth_score.provider_failures_count,
+                        "depth_evidence_provider_count": summary_report.depth_score.evidence_provider_count,
                         "insufficient_evidence": insufficient_evidence,
                         "note": note if insufficient_evidence else "",
                     }
@@ -168,17 +177,27 @@ class ExportService:
                         "seed_niche": run.seed_niche,
                         "status": run.status.value,
                         "generated_at": summary_report.generated_at.isoformat(),
+                        "run_depth_score": summary_report.depth_score.score,
+                        "run_query_success_rate": summary_report.depth_score.breakdown.query_success_rate,
                         "insufficient_evidence": True,
                         "note": note,
                     }
                 ]
-            return niche_summary_rows
+            return [
+                {
+                    **row,
+                    "run_depth_score": summary_report.depth_score.score,
+                    "run_query_success_rate": summary_report.depth_score.breakdown.query_success_rate,
+                }
+                for row in niche_summary_rows
+            ]
         return [
             {
                 "run_id": str(run.id),
                 "seed_niche": run.seed_niche,
                 "status": run.status.value,
                 "generated_at": summary_report.generated_at.isoformat(),
+                "depth_score": summary_report.depth_score.model_dump(mode="json"),
                 "insufficient_evidence": insufficient_evidence,
                 "notes": [note] if insufficient_evidence else [],
                 "niche_summaries": niche_summary_records,

@@ -20,6 +20,9 @@ from app.schemas.report import (
     SourceAgreementSnapshot,
     SummaryScoreBreakdown,
 )
+from app.schemas.research import DepthScoreSnapshot
+from app.services.depth_score import DepthScoreService
+from app.services.shared import to_depth_score_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +52,9 @@ _KEY_SIGNAL_TYPES = {
 
 class SummaryService:
     """Compose evidence-backed summaries from persisted ranking artifacts."""
+
+    def __init__(self, depth_score_service: DepthScoreService | None = None) -> None:
+        self._depth_score_service = depth_score_service or DepthScoreService()
 
     def build_run_summary_report(
         self,
@@ -91,6 +97,7 @@ class SummaryService:
             run_id=run.id,
             seed_niche=run.seed_niche,
             generated_at=datetime.now(UTC),
+            depth_score=to_depth_score_snapshot(self._depth_score_service.calculate_for_run(session=session, run=run)),
             top_niche_opportunities=summaries,
         )
 

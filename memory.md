@@ -11,22 +11,30 @@
 
 - The API is bootable and tested locally.
 - The app runs with a local SQLite database by default for development.
+- The project has a full evidence-first deep-research backbone:
+  - `source_items`
+  - `extracted_signals`
+  - `signal_clusters`
+  - `niche_hypotheses`
+  - `niche_scores`
+  - `provider_failures`
+  - `source_queries`
+  - `source_item_query_links`
 - `research_runs`, `keywords`, `opportunities`, and `exports` are persisted.
-- The route layer is implemented for:
-  - `health`
-  - `research-runs`
-  - `keywords`
-  - `opportunities`
-  - `exports`
+- `research_runs` now expose a runtime-computed `depth_score` snapshot derived from persisted evidence counts and failure context.
 - Structured logging and standard error envelopes are in place.
-- OpenAPI structure has already been aligned at the FastAPI layer.
+- OpenAPI structure is aligned at the FastAPI layer.
+- Hardening steps 1-10 were completed and locked by a dedicated release-gate test suite.
 
 ## Important Reality Check
 
-- This is now a working local research backend, not just a stub API.
+- This is a working local research backend, not a stub API.
 - The current research pipeline is evidence-first and uses public book-market signals.
 - It is still not a true Amazon/Goodreads/KDP-grade deep research engine.
-- The biggest remaining quality gap is provider depth, not API plumbing.
+- The biggest remaining quality gap is provider depth and source breadth, not route/API plumbing.
+- The system must stay honest:
+  - no fabricated output on zero evidence
+  - `completed_no_evidence` is the correct outcome when providers do not yield persisted evidence
 
 ## Key Runtime Behavior
 
@@ -35,7 +43,7 @@
 - On startup the app:
   - loads settings from environment
   - creates the SQLAlchemy engine/session factory
-  - runs `Base.metadata.create_all(...)`
+  - auto-creates schema only in local dev SQLite mode
   - creates the export storage directory
   - wires real services into `app.state`
 
@@ -54,17 +62,25 @@
 - `app/db/session.py`
   - engine/session creation and FastAPI session dependency support
 - `app/db/models/*`
-  - ORM models for users, runs, keywords, metrics, competitors, opportunities, exports
+  - ORM models for users, runs, evidence, keywords, metrics, competitors, opportunities, exports
 - `app/db/repositories/*`
   - thin persistence layer for common DB access paths
 - `app/api/routes/*`
   - thin FastAPI route handlers using response models and service calls
 - `app/services/research_service.py`
-  - synchronous local research orchestration and persistence
+  - evidence-first orchestration and persistence
 - `app/services/providers.py`
-  - public signal providers and query expansion logic
-- `app/services/ranking.py`
-  - keyword discovery and opportunity scoring logic
+  - unified public providers, query expansion, and provider registry
+- `app/services/extraction/*`
+  - rule-based extraction and semantic normalization
+- `app/services/clustering/*`
+  - explainable signal clustering
+- `app/services/hypotheses/*`
+  - niche hypothesis generation
+- `app/services/scoring/*`
+  - explainable ranking and competition density scoring
+- `app/services/summary_service.py`
+  - decision-grade niche summaries and report output
 - `app/services/export_service.py`
   - local export generation for `json`, `csv`, `xlsx`
 - `tests/test_research_api.py`
@@ -77,6 +93,13 @@
 - `research_runs` is the central table.
 - Relationships:
   - `users -> research_runs`
+  - `research_runs -> source_queries`
+  - `research_runs -> source_items`
+  - `research_runs -> extracted_signals`
+  - `research_runs -> signal_clusters`
+  - `research_runs -> niche_hypotheses`
+  - `research_runs -> niche_scores`
+  - `research_runs -> provider_failures`
   - `research_runs -> keyword_candidates`
   - `research_runs -> exports`
   - `keyword_candidates -> keyword_metrics`
@@ -88,27 +111,43 @@
 
 - The current research flow:
   1. create and persist a `research_run`
-  2. collect public book signals through providers
-  3. build keyword blueprints
-  4. materialize keywords, metrics, competitors, and opportunities
-  5. mark the run as completed or failed
+  2. expand queries and fan out to public providers
+  3. persist raw `source_items` and provider/query traceability
+  4. extract rule-based signals from persisted evidence
+  5. normalize and cluster signals
+  6. generate ranked `niche_hypotheses`
+  7. materialize final `keywords` and `opportunities` from ranked hypotheses
+  8. generate summaries and exports
+  9. mark the run as completed, failed, or `completed_no_evidence`
 - Public provider path currently uses:
   - Google Books
   - Open Library
 - The old curated romance-only default path was removed from normal execution.
-- The current ranking is no longer based on a fixed hardcoded romance shortlist as the main discovery path.
+- Final output now comes from deep-path ranked `niche_hypotheses`, not the old legacy title/category blueprint path.
+- Query-level traceability and partial provider failures are persisted.
+- Fiction hypothesis generation no longer collapses to one assembly per subgenre anchor:
+  - `NicheHypothesisService` now ranks top-N secondary candidates per type
+  - branches multiple explainable fiction hypotheses per anchor
+  - logs explicit reject reason codes for rejected branches
+  - includes `assembly_version = "hypothesis_v2"` and `component_signature` in rationale payloads
 
 ## Known Limitation
 
-- `romance` still tends to surface familiar tropes because:
-  - public book APIs expose broad consumer-book signals
-  - trope clustering for romance is naturally repetitive
-  - there is not yet a deep marketplace provider layer
+- Public provider depth is still limited.
+- `romance` can still have overlap between adjacent trope/subgenre opportunities.
+- Rich `romance` evidence no longer collapses mechanically to only 2 hypotheses in the service layer; the current branching path can materialize broader fiction outputs such as:
+  - `friends to lovers small town romance`
+  - `humorous small town romance`
+  - `opposites attract contemporary romance`
+  - `steamy contemporary romance`
+  - `sweet paranormal romance`
+  - `young adults paranormal romance`
+- Provider access on this exact machine has been inconsistent; when live HTTPS is blocked, honest runs end as `completed_no_evidence`.
 - If the user asks for "real deep research", the next real milestone is:
   - Amazon/KDP-compatible provider integration behind credentials
   - Playwright-based marketplace adapters
-  - stronger evidence clustering and deduplication
-  - richer ranking based on source agreement and competition density
+  - stronger marketplace-backed competition evidence
+  - broader provider coverage for self-help/nonfiction
 
 ## API Contract Conventions
 
@@ -130,6 +169,10 @@
   - `python -m pip install -e .[dev]`
 - Run API:
   - `python -m uvicorn app.main:app --host 127.0.0.1 --port 8000`
+- Windows launcher:
+  - `start_api.bat`
+- One-shot local launcher:
+  - `launch_research.bat`
 - Run tests:
   - `python -m pytest -q -p no:cacheprovider`
 - Swagger:
@@ -142,21 +185,49 @@
 - FastAPI app boots successfully.
 - Core route groups register cleanly.
 - Research flow persists runs in the database.
-- Export flow creates real local files.
-- `pytest` passes for the current API-level regression checks.
+- Export flow creates real local files and repeated exports do not overwrite prior artifacts.
+- `pytest` passes for the current regression suite, including the hardening release gate.
+- Current full suite status after the latest hypothesis breadth patch:
+  - `70 passed, 1 warning`
+- A successful self-help run on this machine was validated from persisted live output:
+  - `anxiety journal for young adults`
+  - `codependency workbook`
+- A successful romance run on this machine was validated from persisted live output:
+  - `friends to lovers small town romance`
+  - `friends to lovers contemporary romance`
+- Rich romance regression coverage now proves:
+  - at least 4 materially distinct fiction hypotheses survive when supported
+  - near-duplicate spam is capped
+  - breadth propagates through `ResearchService` into persisted keywords/opportunities
+- Bad phrases that previously failed quality checks are now suppressed in validated runs:
+  - `god help the child`
+  - `self help`
+  - `self help books`
+  - `greatest self help book`
+  - `the self help book`
+  - `the self help compulsion`
 
 ## Recommended Next Step
 
-- Improve research depth rather than adding more route scaffolding.
+- Run a fresh live `romance` validation on the current code and inspect whether the broader branch-based hypothesis generation now survives on real provider evidence, not only on regression fixtures.
+- If live romance still compresses too hard after this patch, the next likely step is diversity-aware reranking, not more route/API work.
+- Keep improving provider depth and discovery breadth rather than adding more route scaffolding.
 - Priority order:
-  1. deeper providers
-  2. stronger evidence clustering
-  3. better ranking model
-  4. richer research summaries for end users
+  1. live validation of branch-based romance breadth
+  2. deeper providers / marketplace adapters
+  3. stronger nonfiction breadth
+  4. better competition realism from marketplace evidence
+  5. richer report/export UX only after evidence quality improves
 
 ## Notes For The Next Session
 
 - Be honest with the user about the current quality level.
-- Do not present the current romance output as true deep research.
-- Prefer improving provider quality over adding more placeholder endpoints.
-- Keep the route layer thin and push logic into services/providers/ranking.
+- Do not present public-provider output as Amazon/KDP-grade deep research.
+- Preserve all hardening guarantees.
+- Prefer improving provider quality and evidence breadth over adding placeholder endpoints.
+- Keep the route layer thin and push logic into services/providers/evidence/extraction/hypotheses/scoring.
+- When debugging romance breadth, inspect `app/services/hypotheses/service.py` first:
+  - reject reason logs
+  - component candidate rankings
+  - per-anchor branch caps
+  - `component_signature` in persisted rationale JSON

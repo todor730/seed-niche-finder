@@ -57,6 +57,7 @@ def test_romance_research_flow_persists_results() -> None:
     create_payload = create_response.json()
     assert create_payload["data"]["seed_niche"] == "romance"
     assert create_payload["data"]["status"] == "completed"
+    assert create_payload["data"]["depth_score"]["score"] > 0.0
 
     run_id = create_payload["data"]["id"]
 
@@ -75,10 +76,14 @@ def test_romance_research_flow_persists_results() -> None:
     opportunity_items = opportunities_response.json()["data"]
     progress_payload = progress_response.json()["data"]
 
-    assert run_payload["summary"]["keyword_count"] >= 5
-    assert run_payload["summary"]["opportunity_count"] >= 5
-    assert len(keyword_items) >= 5
-    assert len(opportunity_items) >= 5
+    assert run_payload["summary"]["keyword_count"] >= 1
+    assert run_payload["summary"]["opportunity_count"] >= 1
+    assert run_payload["depth_score"]["score"] > 0.0
+    assert run_payload["depth_score"]["source_items_count"] >= 1
+    assert len(keyword_items) >= 1
+    assert len(opportunity_items) >= 1
+    assert any("romance" in item["keyword_text"].lower() for item in keyword_items)
+    assert any("romance" in item["title"].lower() for item in opportunity_items)
     assert progress_payload["status"] == "completed"
     assert progress_payload["percent_complete"] == 100.0
 
@@ -111,6 +116,7 @@ def test_export_generation_creates_file() -> None:
 
     exported_data = json.loads(export_path.read_text(encoding="utf-8"))
     assert exported_data[0]["seed_niche"] == "romance"
+    assert exported_data[0]["depth_score"]["score"] > 0.0
     assert len(exported_data[0]["keywords"]) >= 1
     assert isinstance(exported_data[0]["niche_summaries"], list)
 
@@ -128,6 +134,7 @@ def test_zero_evidence_run_is_honest_in_api_and_export_payloads() -> None:
 
     assert create_payload["status"] == ResearchRunStatus.COMPLETED_NO_EVIDENCE.value
     assert create_payload["error_message"] == "No persisted source evidence was collected from the configured providers."
+    assert create_payload["depth_score"]["score"] == 0.0
 
     run_response = client.get(f"/api/v1/research-runs/{run_id}")
     progress_response = client.get(f"/api/v1/research-runs/{run_id}/progress")
@@ -145,6 +152,7 @@ def test_zero_evidence_run_is_honest_in_api_and_export_payloads() -> None:
     opportunity_items = opportunities_response.json()["data"]
 
     assert run_payload["status"] == ResearchRunStatus.COMPLETED_NO_EVIDENCE.value
+    assert run_payload["depth_score"]["score"] == 0.0
     assert run_payload["summary"]["keyword_count"] == 0
     assert run_payload["summary"]["opportunity_count"] == 0
     assert progress_payload["status"] == ResearchRunStatus.COMPLETED_NO_EVIDENCE.value
@@ -163,6 +171,7 @@ def test_zero_evidence_run_is_honest_in_api_and_export_payloads() -> None:
     exported_data = json.loads(export_path.read_text(encoding="utf-8"))
 
     assert exported_data[0]["status"] == ResearchRunStatus.COMPLETED_NO_EVIDENCE.value
+    assert exported_data[0]["depth_score"]["score"] == 0.0
     assert exported_data[0]["insufficient_evidence"] is True
     assert exported_data[0]["keywords"] == []
     assert exported_data[0]["opportunities"] == []

@@ -28,10 +28,22 @@ _SECONDARY_PRIORITY = {
     "relationship_dynamic": 4,
 }
 _GENERIC_VALUES = {
-    "audience": {"everyone", "anyone", "readers", "book lovers"},
+    "audience": {"everyone", "anyone", "readers", "book lovers", "women"},
     "promise": {"guide", "system", "plan", "method"},
     "tone": {"emotional"},
 }
+_GENERIC_NONFICTION_SOLUTIONS = {"guide", "method", "plan", "system"}
+_SPECIFIC_FICTION_AUDIENCES = {"young adults", "new adults", "teens", "women over 40"}
+_MAX_COMPONENT_CANDIDATES = {
+    "trope": 2,
+    "solution_angle": 1,
+    "audience": 1,
+    "promise": 1,
+    "tone": 2,
+    "setting": 2,
+    "relationship_dynamic": 1,
+}
+_MAX_FICTION_BRANCHES_PER_ANCHOR = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +55,26 @@ class ClusterContext:
     source_items: tuple[SourceItem, ...]
     provider_names: frozenset[str]
     average_confidence: float
+
+
+@dataclass(frozen=True, slots=True)
+class ComponentCandidate:
+    """A ranked component candidate linked to one anchor."""
+
+    context: ClusterContext
+    cooccurrence_ratio: float
+    selection_score: float
+    shared_source_item_ids: frozenset[UUID]
+
+
+@dataclass(frozen=True, slots=True)
+class HypothesisBranch:
+    """A candidate branch assembled from one anchor plus secondary signals."""
+
+    label: str
+    selected_components: dict[str, ComponentCandidate]
+    component_signature: tuple[tuple[str, str], ...]
+    branch_score: float
 
 
 class NicheHypothesisService:
@@ -125,22 +157,26 @@ class NicheHypothesisService:
             contexts_by_type[context.cluster.signal_type].append(context)
 
         payload_by_label: dict[str, NicheHypothesisCreate] = {}
-        score_by_label: dict[str, tuple[int, int, float]] = {}
+        score_by_label: dict[str, tuple[int, int, float, float]] = {}
 
         for primary_type in _PRIMARY_SIGNAL_TYPES:
             for anchor in contexts_by_type.get(primary_type, []):
-                assembled = self._assemble_from_anchor(anchor=anchor, contexts_by_type=contexts_by_type)
-                if assembled is None:
-                    continue
-                label = assembled.hypothesis_label
-                quality_key = (
-                    assembled.evidence_count,
-                    assembled.source_count,
-                    float(assembled.rationale_json.get("anchor_avg_confidence", 0.0)),
+                candidate_components = self._select_related_components(anchor=anchor, contexts_by_type=contexts_by_type)
+                assembled_payloads = self._assemble_from_anchor(
+                    anchor=anchor,
+                    candidate_components=candidate_components,
                 )
-                if label not in payload_by_label or quality_key > score_by_label[label]:
-                    payload_by_label[label] = assembled
-                    score_by_label[label] = quality_key
+                for assembled in assembled_payloads:
+                    label = assembled.hypothesis_label
+                    quality_key = (
+                        assembled.evidence_count,
+                        assembled.source_count,
+                        float(assembled.rationale_json.get("anchor_avg_confidence", 0.0)),
+                        float(assembled.rationale_json.get("branch_score", 0.0)),
+                    )
+                    if label not in payload_by_label or quality_key > score_by_label[label]:
+                        payload_by_label[label] = assembled
+                        score_by_label[label] = quality_key
 
         return sorted(
             payload_by_label.values(),
@@ -151,95 +187,259 @@ class NicheHypothesisService:
         self,
         *,
         anchor: ClusterContext,
-        contexts_by_type: dict[str, list[ClusterContext]],
-    ) -> NicheHypothesisCreate | None:
-        optional_components: dict[str, tuple[ClusterContext, float]] = {}
-        for signal_type in sorted(_SECONDARY_PRIORITY, key=_SECONDARY_PRIORITY.get):
-            selected = self._select_related_component(anchor=anchor, candidate_contexts=contexts_by_type.get(signal_type, []))
-            if selected is not None:
-                optional_components[signal_type] = selected
-
+        candidate_components: dict[str, list[ComponentCandidate]],
+    ) -> list[NicheHypothesisCreate]:
         if anchor.cluster.signal_type == "subgenre":
-            label = self._build_fiction_label(anchor=anchor, optional_components=optional_components)
+            branches = self._build_fiction_branches(anchor=anchor, candidate_components=candidate_components)
         else:
-            label = self._build_nonfiction_label(anchor=anchor, optional_components=optional_components)
+            branches = self._build_nonfiction_branches(anchor=anchor, candidate_components=candidate_components)
 
-        if label is None or self._reject_hypothesis(anchor=anchor, optional_components=optional_components, label=label):
-            return None
+        if not branches:
+            self._log_hypothesis_rejection(
+                anchor=anchor,
+                candidate_components=candidate_components,
+                selected_components={},
+                proposed_label=anchor.cluster.canonical_label,
+                reason_code="no_viable_branches",
+            )
+            return []
 
-        supporting_source_items = self._collect_supporting_source_items(anchor=anchor, optional_components=optional_components)
-        provider_names = sorted({item.provider_name for item in supporting_source_items})
-        rationale_json = self._build_rationale(
-            anchor=anchor,
-            optional_components=optional_components,
-            label=label,
-            supporting_source_items=supporting_source_items,
-            provider_names=provider_names,
-        )
-        summary = self._build_summary(anchor=anchor, optional_components=optional_components, label=label)
+        payloads: list[NicheHypothesisCreate] = []
+        for branch in branches:
+            reason_code = self._reject_hypothesis(anchor=anchor, selected_components=branch.selected_components, label=branch.label)
+            if reason_code is not None:
+                self._log_hypothesis_rejection(
+                    anchor=anchor,
+                    candidate_components=candidate_components,
+                    selected_components=branch.selected_components,
+                    proposed_label=branch.label,
+                    reason_code=reason_code,
+                )
+                continue
 
-        return NicheHypothesisCreate(
-            run_id=anchor.cluster.run_id,
-            primary_cluster_id=anchor.cluster.id,
-            hypothesis_label=label,
-            summary=summary,
-            rationale_json=rationale_json,
-            evidence_count=len(supporting_source_items),
-            source_count=len(provider_names),
-            status=NicheHypothesisStatus.IDENTIFIED,
-        )
+            supporting_source_items = self._collect_supporting_source_items(
+                anchor=anchor,
+                selected_components=branch.selected_components,
+            )
+            provider_names = sorted({item.provider_name for item in supporting_source_items})
+            rationale_json = self._build_rationale(
+                anchor=anchor,
+                selected_components=branch.selected_components,
+                label=branch.label,
+                supporting_source_items=supporting_source_items,
+                provider_names=provider_names,
+                component_signature=branch.component_signature,
+                branch_score=branch.branch_score,
+            )
+            summary = self._build_summary(anchor=anchor, selected_components=branch.selected_components, label=branch.label)
 
-    def _select_related_component(
+            payloads.append(
+                NicheHypothesisCreate(
+                    run_id=anchor.cluster.run_id,
+                    primary_cluster_id=anchor.cluster.id,
+                    hypothesis_label=branch.label,
+                    summary=summary,
+                    rationale_json=rationale_json,
+                    evidence_count=len(supporting_source_items),
+                    source_count=len(provider_names),
+                    status=NicheHypothesisStatus.IDENTIFIED,
+                )
+            )
+
+        return payloads
+
+    def _select_related_components(
         self,
         *,
         anchor: ClusterContext,
+        contexts_by_type: dict[str, list[ClusterContext]],
+    ) -> dict[str, list[ComponentCandidate]]:
+        ranked_by_type: dict[str, list[ComponentCandidate]] = {}
+        for signal_type in sorted(_SECONDARY_PRIORITY, key=_SECONDARY_PRIORITY.get):
+            candidates = self._rank_related_components(
+                anchor=anchor,
+                signal_type=signal_type,
+                candidate_contexts=contexts_by_type.get(signal_type, []),
+            )
+            if candidates:
+                ranked_by_type[signal_type] = candidates[: _MAX_COMPONENT_CANDIDATES.get(signal_type, 1)]
+        return ranked_by_type
+
+    def _rank_related_components(
+        self,
+        *,
+        anchor: ClusterContext,
+        signal_type: str,
         candidate_contexts: Sequence[ClusterContext],
-    ) -> tuple[ClusterContext, float] | None:
-        best_context: ClusterContext | None = None
-        best_score = 0.0
-        best_ratio = 0.0
+    ) -> list[ComponentCandidate]:
+        ranked: list[ComponentCandidate] = []
+        min_ratio = self._minimum_ratio_for_component(anchor=anchor, signal_type=signal_type)
 
         for candidate in candidate_contexts:
             if candidate.cluster.id == anchor.cluster.id:
                 continue
             if self._is_generic(candidate.cluster.signal_type, candidate.cluster.canonical_label):
                 continue
+            if self._is_redundant_component(anchor_label=anchor.cluster.canonical_label, component_label=candidate.cluster.canonical_label):
+                continue
 
             shared_items = anchor.source_item_ids & candidate.source_item_ids
             if not shared_items:
                 continue
+
             ratio = len(shared_items) / max(len(anchor.source_item_ids), 1)
-            min_ratio = 1.0 if len(anchor.source_item_ids) == 1 else 0.5
             if ratio < min_ratio:
                 continue
-            if self._is_redundant_component(anchor_label=anchor.cluster.canonical_label, component_label=candidate.cluster.canonical_label):
-                continue
 
-            score = ratio * 0.60 + candidate.average_confidence * 0.25 + min(1.0, candidate.cluster.source_count / 2.0) * 0.15
-            if score > best_score:
-                best_context = candidate
-                best_score = score
-                best_ratio = ratio
+            score = (
+                ratio * 0.55
+                + candidate.average_confidence * 0.20
+                + min(1.0, candidate.cluster.item_count / 4.0) * 0.15
+                + min(1.0, candidate.cluster.source_count / 2.0) * 0.10
+            )
+            ranked.append(
+                ComponentCandidate(
+                    context=candidate,
+                    cooccurrence_ratio=round(ratio, 2),
+                    selection_score=round(score, 3),
+                    shared_source_item_ids=frozenset(shared_items),
+                )
+            )
 
-        if best_context is None:
-            return None
-        return best_context, round(best_ratio, 2)
+        return sorted(
+            ranked,
+            key=lambda candidate: (
+                -candidate.selection_score,
+                -candidate.cooccurrence_ratio,
+                -candidate.context.cluster.item_count,
+                candidate.context.cluster.canonical_label,
+            ),
+        )
+
+    def _build_fiction_branches(
+        self,
+        *,
+        anchor: ClusterContext,
+        candidate_components: dict[str, list[ComponentCandidate]],
+    ) -> list[HypothesisBranch]:
+        branch_by_signature: dict[tuple[tuple[str, str], ...], HypothesisBranch] = {}
+
+        def add_branch(selected_components: dict[str, ComponentCandidate]) -> None:
+            label = self._build_fiction_label(anchor=anchor, selected_components=selected_components)
+            if label is None:
+                return
+            component_signature = self._component_signature(selected_components)
+            branch_score = self._branch_score(anchor=anchor, selected_components=selected_components)
+            branch = HypothesisBranch(
+                label=label,
+                selected_components=dict(selected_components),
+                component_signature=component_signature,
+                branch_score=branch_score,
+            )
+            current = branch_by_signature.get(component_signature)
+            if current is None or branch.branch_score > current.branch_score:
+                branch_by_signature[component_signature] = branch
+
+        trope_candidates = candidate_components.get("trope", [])
+        tone_candidates = candidate_components.get("tone", [])
+        setting_candidates = candidate_components.get("setting", [])
+        audience_candidates = candidate_components.get("audience", [])
+        promise_candidates = candidate_components.get("promise", [])
+        relationship_candidates = candidate_components.get("relationship_dynamic", [])
+
+        preferred_audience = audience_candidates[:1]
+        preferred_promise = promise_candidates[:1]
+        preferred_relationship = relationship_candidates[:1]
+
+        for trope in trope_candidates:
+            selected = {"trope": trope}
+            if preferred_audience:
+                selected["audience"] = preferred_audience[0]
+            if preferred_promise:
+                selected["promise"] = preferred_promise[0]
+            if preferred_relationship:
+                selected["relationship_dynamic"] = preferred_relationship[0]
+            add_branch(selected)
+
+            for tone in tone_candidates[:1]:
+                add_branch({**selected, "tone": tone})
+
+        for tone in tone_candidates:
+            selected = {"tone": tone}
+            if preferred_audience:
+                selected["audience"] = preferred_audience[0]
+            if preferred_promise:
+                selected["promise"] = preferred_promise[0]
+            add_branch(selected)
+
+        for setting in setting_candidates:
+            selected = {"setting": setting}
+            if preferred_audience:
+                selected["audience"] = preferred_audience[0]
+            add_branch(selected)
+
+            if trope_candidates:
+                add_branch({"trope": trope_candidates[0], "setting": setting, **selected})
+
+        if preferred_audience and self._is_specific_fiction_audience(preferred_audience[0].context.cluster.canonical_label):
+            add_branch({"audience": preferred_audience[0]})
+
+        return sorted(
+            branch_by_signature.values(),
+            key=lambda branch: (-branch.branch_score, branch.label),
+        )[:_MAX_FICTION_BRANCHES_PER_ANCHOR]
+
+    def _build_nonfiction_branches(
+        self,
+        *,
+        anchor: ClusterContext,
+        candidate_components: dict[str, list[ComponentCandidate]],
+    ) -> list[HypothesisBranch]:
+        selected_components: dict[str, ComponentCandidate] = {}
+        for signal_type in ("solution_angle", "audience", "promise"):
+            if candidate_components.get(signal_type):
+                selected_components[signal_type] = candidate_components[signal_type][0]
+
+        label = self._build_nonfiction_label(anchor=anchor, selected_components=selected_components)
+        if label is None:
+            return []
+
+        return [
+            HypothesisBranch(
+                label=label,
+                selected_components=selected_components,
+                component_signature=self._component_signature(selected_components),
+                branch_score=self._branch_score(anchor=anchor, selected_components=selected_components),
+            )
+        ]
 
     def _build_fiction_label(
         self,
         *,
         anchor: ClusterContext,
-        optional_components: dict[str, tuple[ClusterContext, float]],
+        selected_components: dict[str, ComponentCandidate],
     ) -> str | None:
         base_label = anchor.cluster.canonical_label
-        trope = optional_components.get("trope")
-        setting = optional_components.get("setting")
+        trope = selected_components.get("trope")
+        setting = selected_components.get("setting")
+        tone = selected_components.get("tone")
+        audience = selected_components.get("audience")
 
         label = base_label
         if trope is not None:
-            label = f"{trope[0].cluster.canonical_label} {label}"
-        elif setting is not None and not self._is_redundant_component(anchor_label=label, component_label=setting[0].cluster.canonical_label):
-            label = f"{label} in {setting[0].cluster.canonical_label}"
+            label = f"{trope.context.cluster.canonical_label} {label}"
+        elif setting is not None and not self._is_redundant_component(
+            anchor_label=label,
+            component_label=setting.context.cluster.canonical_label,
+        ):
+            label = f"{setting.context.cluster.canonical_label} {label}"
+        elif tone is not None and not self._is_redundant_component(
+            anchor_label=label,
+            component_label=tone.context.cluster.canonical_label,
+        ):
+            label = f"{tone.context.cluster.canonical_label} {label}"
+        elif audience is not None and self._is_specific_fiction_audience(audience.context.cluster.canonical_label):
+            label = f"{audience.context.cluster.canonical_label} {label}"
 
         return " ".join(label.split())
 
@@ -247,16 +447,16 @@ class NicheHypothesisService:
         self,
         *,
         anchor: ClusterContext,
-        optional_components: dict[str, tuple[ClusterContext, float]],
+        selected_components: dict[str, ComponentCandidate],
     ) -> str | None:
         label = anchor.cluster.canonical_label
-        solution = optional_components.get("solution_angle")
-        audience = optional_components.get("audience")
+        solution = selected_components.get("solution_angle")
+        audience = selected_components.get("audience")
 
         if solution is not None:
-            label = f"{label} {solution[0].cluster.canonical_label}"
+            label = f"{label} {solution.context.cluster.canonical_label}"
         if audience is not None:
-            label = f"{label} for {audience[0].cluster.canonical_label}"
+            label = f"{label} for {audience.context.cluster.canonical_label}"
 
         return " ".join(label.split())
 
@@ -264,38 +464,60 @@ class NicheHypothesisService:
         self,
         *,
         anchor: ClusterContext,
-        optional_components: dict[str, tuple[ClusterContext, float]],
+        selected_components: dict[str, ComponentCandidate],
         label: str,
-    ) -> bool:
+    ) -> str | None:
         if len(label.split()) < 2:
-            return True
+            return "label_too_short"
         if self._is_generic(anchor.cluster.signal_type, anchor.cluster.canonical_label):
-            return True
+            return "generic_anchor"
 
-        meaningful_secondary_types = [
-            signal_type
-            for signal_type in optional_components
-            if signal_type in {"trope", "audience", "promise", "tone", "setting", "relationship_dynamic", "solution_angle"}
-        ]
-        if not meaningful_secondary_types:
-            return True
+        if anchor.cluster.signal_type == "subgenre":
+            if not selected_components:
+                return "fiction_branch_missing_secondary"
 
-        if anchor.cluster.signal_type == "subgenre" and "trope" not in optional_components and "audience" not in optional_components:
-            strong_contextual = "tone" in optional_components or "setting" in optional_components
-            if not strong_contextual:
-                return True
-        if anchor.cluster.signal_type == "problem_angle" and "solution_angle" not in optional_components:
-            return True
-        return False
+            trope = selected_components.get("trope")
+            tone = selected_components.get("tone")
+            setting = selected_components.get("setting")
+            audience = selected_components.get("audience")
+            relationship = selected_components.get("relationship_dynamic")
+
+            has_specific_audience = audience is not None and self._is_specific_fiction_audience(audience.context.cluster.canonical_label)
+            if trope is None and tone is None and setting is None and relationship is None and not has_specific_audience:
+                return "fiction_branch_not_specific_enough"
+
+            if trope is None and tone is not None and tone.cooccurrence_ratio < 0.5 and setting is None and not has_specific_audience:
+                return "tone_branch_support_too_weak"
+
+            if trope is None and setting is not None and setting.cooccurrence_ratio < 0.5 and tone is None and not has_specific_audience:
+                return "setting_branch_support_too_weak"
+
+            return None
+
+        solution = selected_components.get("solution_angle")
+        audience = selected_components.get("audience")
+        promise = selected_components.get("promise")
+        if solution is None:
+            return "nonfiction_missing_solution"
+        solution_label = solution.context.cluster.canonical_label
+        if solution_label in _GENERIC_NONFICTION_SOLUTIONS and audience is None and promise is None:
+            return "generic_solution_without_support"
+        if solution_label in _GENERIC_NONFICTION_SOLUTIONS and audience is not None:
+            audience_label = audience.context.cluster.canonical_label
+            if self._is_generic("audience", audience_label) or len(audience_label.split()) < 2:
+                return "generic_audience_for_generic_solution"
+        return None
 
     def _build_rationale(
         self,
         *,
         anchor: ClusterContext,
-        optional_components: dict[str, tuple[ClusterContext, float]],
+        selected_components: dict[str, ComponentCandidate],
         label: str,
         supporting_source_items: Sequence[SourceItem],
         provider_names: Sequence[str],
+        component_signature: tuple[tuple[str, str], ...],
+        branch_score: float,
     ) -> dict[str, object]:
         component_payloads = [
             {
@@ -310,30 +532,32 @@ class NicheHypothesisService:
                 "role": "primary",
             }
         ]
-        for signal_type, (component, cooccurrence_ratio) in sorted(optional_components.items(), key=lambda item: _SECONDARY_PRIORITY[item[0]]):
-            shared_items = sorted(str(item_id) for item_id in (anchor.source_item_ids & component.source_item_ids))
+        for signal_type, candidate in sorted(selected_components.items(), key=lambda item: _SECONDARY_PRIORITY[item[0]]):
             component_payloads.append(
                 {
                     "signal_type": signal_type,
-                    "cluster_id": str(component.cluster.id),
-                    "label": component.cluster.canonical_label,
-                    "source_count": component.cluster.source_count,
-                    "item_count": component.cluster.item_count,
-                    "avg_confidence": round(component.average_confidence, 2),
-                    "saturation_score": round(component.cluster.saturation_score, 1),
-                    "novelty_score": round(component.cluster.novelty_score, 1),
-                    "cooccurrence_ratio": cooccurrence_ratio,
-                    "shared_source_item_ids": shared_items,
+                    "cluster_id": str(candidate.context.cluster.id),
+                    "label": candidate.context.cluster.canonical_label,
+                    "source_count": candidate.context.cluster.source_count,
+                    "item_count": candidate.context.cluster.item_count,
+                    "avg_confidence": round(candidate.context.average_confidence, 2),
+                    "saturation_score": round(candidate.context.cluster.saturation_score, 1),
+                    "novelty_score": round(candidate.context.cluster.novelty_score, 1),
+                    "cooccurrence_ratio": candidate.cooccurrence_ratio,
+                    "selection_score": candidate.selection_score,
+                    "shared_source_item_ids": sorted(str(item_id) for item_id in candidate.shared_source_item_ids),
                     "role": "secondary",
                 }
             )
 
         example_source_items = supporting_source_items[:3]
         return {
-            "assembly_version": "hypothesis_v1",
+            "assembly_version": "hypothesis_v2",
             "hypothesis_kind": "fiction" if anchor.cluster.signal_type == "subgenre" else "nonfiction",
             "label": label,
             "anchor_avg_confidence": round(anchor.average_confidence, 2),
+            "branch_score": round(branch_score, 3),
+            "component_signature": [[signal_type, label_value] for signal_type, label_value in component_signature],
             "components": component_payloads,
             "supporting_source_item_ids": [str(item.id) for item in supporting_source_items],
             "supporting_source_titles": [item.title for item in example_source_items],
@@ -352,33 +576,110 @@ class NicheHypothesisService:
         self,
         *,
         anchor: ClusterContext,
-        optional_components: dict[str, tuple[ClusterContext, float]],
+        selected_components: dict[str, ComponentCandidate],
         label: str,
     ) -> str:
         summary_parts = [f"Primary anchor: {anchor.cluster.canonical_label}."]
-        if "trope" in optional_components:
-            summary_parts.append(f"Trope support: {optional_components['trope'][0].cluster.canonical_label}.")
-        if "solution_angle" in optional_components:
-            summary_parts.append(f"Solution angle: {optional_components['solution_angle'][0].cluster.canonical_label}.")
-        if "audience" in optional_components:
-            summary_parts.append(f"Audience signal: {optional_components['audience'][0].cluster.canonical_label}.")
-        if "promise" in optional_components:
-            summary_parts.append(f"Promise signal: {optional_components['promise'][0].cluster.canonical_label}.")
+        if "trope" in selected_components:
+            summary_parts.append(f"Trope support: {selected_components['trope'].context.cluster.canonical_label}.")
+        if "tone" in selected_components:
+            summary_parts.append(f"Tone support: {selected_components['tone'].context.cluster.canonical_label}.")
+        if "setting" in selected_components:
+            summary_parts.append(f"Setting support: {selected_components['setting'].context.cluster.canonical_label}.")
+        if "solution_angle" in selected_components:
+            summary_parts.append(f"Solution angle: {selected_components['solution_angle'].context.cluster.canonical_label}.")
+        if "audience" in selected_components:
+            summary_parts.append(f"Audience signal: {selected_components['audience'].context.cluster.canonical_label}.")
+        if "promise" in selected_components:
+            summary_parts.append(f"Promise signal: {selected_components['promise'].context.cluster.canonical_label}.")
         return f"{label}. {' '.join(summary_parts)}".strip()
 
     @staticmethod
     def _collect_supporting_source_items(
         *,
         anchor: ClusterContext,
-        optional_components: dict[str, tuple[ClusterContext, float]],
+        selected_components: dict[str, ComponentCandidate],
     ) -> list[SourceItem]:
         supporting_items: dict[UUID, SourceItem] = {item.id: item for item in anchor.source_items}
-        for component, _ratio in optional_components.values():
-            shared_items = anchor.source_item_ids & component.source_item_ids
-            for item in component.source_items:
-                if item.id in shared_items:
+        for candidate in selected_components.values():
+            for item in candidate.context.source_items:
+                if item.id in candidate.shared_source_item_ids:
                     supporting_items[item.id] = item
         return sorted(supporting_items.values(), key=lambda item: (item.provider_name, item.title.lower()))
+
+    def _log_hypothesis_rejection(
+        self,
+        *,
+        anchor: ClusterContext,
+        candidate_components: dict[str, list[ComponentCandidate]],
+        selected_components: dict[str, ComponentCandidate],
+        proposed_label: str,
+        reason_code: str,
+    ) -> None:
+        logger.info(
+            "Niche hypothesis branch rejected.",
+            extra={
+                "stage": "niche_hypothesis_rejected",
+                "run_id": str(anchor.cluster.run_id),
+                "anchor_signal_type": anchor.cluster.signal_type,
+                "anchor_label": anchor.cluster.canonical_label,
+                "proposed_label": proposed_label,
+                "reason_code": reason_code,
+                "candidate_components_by_type": {
+                    signal_type: [
+                        {
+                            "label": candidate.context.cluster.canonical_label,
+                            "cooccurrence_ratio": candidate.cooccurrence_ratio,
+                            "selection_score": candidate.selection_score,
+                            "item_count": candidate.context.cluster.item_count,
+                        }
+                        for candidate in candidates
+                    ]
+                    for signal_type, candidates in candidate_components.items()
+                },
+                "selected_components": {
+                    signal_type: {
+                        "label": candidate.context.cluster.canonical_label,
+                        "cooccurrence_ratio": candidate.cooccurrence_ratio,
+                        "selection_score": candidate.selection_score,
+                    }
+                    for signal_type, candidate in selected_components.items()
+                },
+            },
+        )
+
+    def _minimum_ratio_for_component(self, *, anchor: ClusterContext, signal_type: str) -> float:
+        if len(anchor.source_item_ids) <= 1:
+            return 1.0
+        if signal_type in {"trope", "tone", "setting", "relationship_dynamic"}:
+            return 0.4
+        if signal_type == "audience":
+            return 0.5
+        return 0.5
+
+    def _component_signature(
+        self,
+        selected_components: dict[str, ComponentCandidate],
+    ) -> tuple[tuple[str, str], ...]:
+        return tuple(
+            sorted(
+                (signal_type, candidate.context.cluster.canonical_label)
+                for signal_type, candidate in selected_components.items()
+            )
+        )
+
+    def _branch_score(
+        self,
+        *,
+        anchor: ClusterContext,
+        selected_components: dict[str, ComponentCandidate],
+    ) -> float:
+        secondary_score = sum(candidate.selection_score for candidate in selected_components.values())
+        return round(anchor.average_confidence + secondary_score, 3)
+
+    @staticmethod
+    def _is_specific_fiction_audience(label: str) -> bool:
+        return label in _SPECIFIC_FICTION_AUDIENCES
 
     @staticmethod
     def _is_redundant_component(*, anchor_label: str, component_label: str) -> bool:

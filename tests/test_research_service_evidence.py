@@ -46,6 +46,8 @@ def make_raw_item(
     dedupe_key: str,
     title: str,
     categories: list[str],
+    subtitle: str | None = None,
+    description_text: str | None = None,
 ) -> RawSourceItem:
     return RawSourceItem(
         provider_name=provider_name,
@@ -55,10 +57,20 @@ def make_raw_item(
         provider_item_id=dedupe_key,
         source_url=f"https://example.test/{dedupe_key}",
         title=title,
+        subtitle=subtitle,
         authors=["Author One"],
         categories=categories,
-        description_text=f"Description for {title}",
-        content_text=f"{title}\n{' '.join(categories)}",
+        description_text=description_text or f"Description for {title}",
+        content_text="\n".join(
+            part
+            for part in [
+                title,
+                subtitle or "",
+                " ".join(categories),
+                description_text or f"Description for {title}",
+            ]
+            if part
+        ),
         published_date_raw="2024-01-01",
         average_rating=4.2,
         rating_count=12,
@@ -175,6 +187,206 @@ def make_multi_query_traceability_batch() -> ProviderSearchBatchResult:
     )
 
 
+def make_self_help_quality_batch() -> ProviderSearchBatchResult:
+    query = ProviderQuery(text="self-help books", kind="books")
+    result = ProviderQueryResult(
+        provider_name="google_books",
+        query=query,
+        items=[
+            make_raw_item(
+                provider_name="google_books",
+                query_text=query.text,
+                dedupe_key="s1",
+                title="God Help the Child",
+                categories=["Literary Fiction", "Novel"],
+            ),
+            make_raw_item(
+                provider_name="google_books",
+                query_text=query.text,
+                dedupe_key="s2",
+                title="Self Help Books",
+                categories=["Self Help", "Personal Growth"],
+            ),
+            make_raw_item(
+                provider_name="google_books",
+                query_text=query.text,
+                dedupe_key="s3",
+                title="Greatest Self Help Book",
+                categories=["Self Help", "Personal Growth"],
+            ),
+            make_raw_item(
+                provider_name="google_books",
+                query_text=query.text,
+                dedupe_key="s4",
+                title="Self Confidence and Self Esteem Workbook for Women",
+                categories=["Self Help", "Self Confidence", "Self Esteem", "Women", "Workbook"],
+                description_text="A practical workbook for women who want to rebuild self confidence and self esteem.",
+            ),
+            make_raw_item(
+                provider_name="open_library",
+                query_text=query.text,
+                dedupe_key="s5",
+                title="Burnout Recovery Workbook for Busy Professionals",
+                categories=["Self Help", "Burnout Recovery", "Busy Professionals", "Workbook"],
+                description_text="A workbook for busy professionals dealing with burnout and stress.",
+            ),
+            make_raw_item(
+                provider_name="google_books",
+                query_text=query.text,
+                dedupe_key="s6",
+                title="Depression and Anxiety Relief Journal",
+                categories=["Self Help", "Anxiety", "Journal"],
+                description_text="A guided journal for young adults dealing with anxiety and depression.",
+            ),
+        ],
+    )
+    return ProviderSearchBatchResult(
+        seed_niche="self-help",
+        queries=[query],
+        results=[result],
+        failures=[],
+    )
+
+
+def make_self_help_live_failure_like_batch() -> ProviderSearchBatchResult:
+    query = ProviderQuery(text="self-help books", kind="books")
+    result = ProviderQueryResult(
+        provider_name="google_books",
+        query=query,
+        items=[
+            make_raw_item(
+                provider_name="google_books",
+                query_text=query.text,
+                dedupe_key="sl1",
+                title="The Self Help Book",
+                categories=["Self Help", "Personal Growth"],
+            ),
+            make_raw_item(
+                provider_name="open_library",
+                query_text=query.text,
+                dedupe_key="sl2",
+                title="The Self Help Compulsion",
+                categories=["Self Help", "Psychology"],
+            ),
+            make_raw_item(
+                provider_name="google_books",
+                query_text=query.text,
+                dedupe_key="sl3",
+                title="God Help the Child",
+                categories=["Self Help", "Personal Growth"],
+            ),
+            make_raw_item(
+                provider_name="open_library",
+                query_text=query.text,
+                dedupe_key="sl4",
+                title="Greatest Self Help Book",
+                categories=["Self Help", "Personal Growth"],
+            ),
+            make_raw_item(
+                provider_name="google_books",
+                query_text=query.text,
+                dedupe_key="sl5",
+                title="Ten Days to Self Esteem",
+                categories=["Self Help", "Self Esteem"],
+            ),
+            make_raw_item(
+                provider_name="google_books",
+                query_text=query.text,
+                dedupe_key="sl6",
+                title="Self Confidence and Self Esteem Workbook for Women",
+                categories=["Self Help", "Self Confidence", "Self Esteem", "Women", "Workbook"],
+                description_text="A practical workbook for women who want to rebuild self confidence and self esteem.",
+            ),
+            make_raw_item(
+                provider_name="open_library",
+                query_text=query.text,
+                dedupe_key="sl7",
+                title="Burnout Recovery Workbook for Busy Professionals",
+                categories=["Self Help", "Burnout Recovery", "Busy Professionals", "Workbook"],
+                description_text="A workbook for busy professionals dealing with burnout and stress.",
+            ),
+            make_raw_item(
+                provider_name="google_books",
+                query_text=query.text,
+                dedupe_key="sl8",
+                title="Depression and Anxiety Relief Journal",
+                categories=["Self Help", "Anxiety", "Journal"],
+                description_text="A guided journal for young adults dealing with anxiety and depression.",
+            ),
+        ],
+    )
+    return ProviderSearchBatchResult(
+        seed_niche="self-help",
+        queries=[query],
+        results=[result],
+        failures=[],
+    )
+
+
+def make_rich_romance_batch() -> ProviderSearchBatchResult:
+    query = ProviderQuery(text="romance books", kind="books")
+    result = ProviderQueryResult(
+        provider_name="google_books",
+        query=query,
+        items=[
+            make_raw_item(
+                provider_name="google_books",
+                query_text=query.text,
+                dedupe_key="rr1",
+                title="Friends to Lovers Small Town Romance for Women Over 40",
+                categories=["Romance", "Friends to Lovers", "Small Town Romance", "Women Over 40"],
+                description_text="A heartfelt romance for women over 40 in a small town.",
+            ),
+            make_raw_item(
+                provider_name="open_library",
+                query_text=query.text,
+                dedupe_key="rr2",
+                title="Humorous Small Town Romance",
+                categories=["Romance", "Small Town Romance", "Humorous"],
+                description_text="A humorous small-town love story.",
+            ),
+            make_raw_item(
+                provider_name="google_books",
+                query_text=query.text,
+                dedupe_key="rr3",
+                title="Opposites Attract Contemporary Romance",
+                categories=["Romance", "Contemporary Romance", "Opposites Attract"],
+                description_text="A steamy opposites attract contemporary romance.",
+            ),
+            make_raw_item(
+                provider_name="open_library",
+                query_text=query.text,
+                dedupe_key="rr4",
+                title="Steamy Contemporary Romance in a Small Town",
+                categories=["Romance", "Contemporary Romance", "Steamy", "Small Town"],
+                description_text="A steamy contemporary romance set in a small town.",
+            ),
+            make_raw_item(
+                provider_name="google_books",
+                query_text=query.text,
+                dedupe_key="rr5",
+                title="Sweet Paranormal Romance for Young Adults",
+                categories=["Romance", "Paranormal Romance", "Sweet", "Young Adults"],
+                description_text="A sweet paranormal romance for young adults.",
+            ),
+            make_raw_item(
+                provider_name="open_library",
+                query_text=query.text,
+                dedupe_key="rr6",
+                title="Young Adult Paranormal Romance",
+                categories=["Romance", "Paranormal Romance", "Young Adult"],
+                description_text="A young adult paranormal romance adventure.",
+            ),
+        ],
+    )
+    return ProviderSearchBatchResult(
+        seed_niche="romance",
+        queries=[query],
+        results=[result],
+        failures=[],
+    )
+
+
 def test_research_service_persists_source_items_and_keeps_current_flow(
     session_factory,
     workspace: Path,
@@ -212,6 +424,10 @@ def test_research_service_persists_source_items_and_keeps_current_flow(
 
     assert run is not None
     assert run.status == ResearchRunStatus.COMPLETED
+    assert created_run.depth_score is not None
+    assert created_run.depth_score.score > 0.0
+    assert created_run.depth_score.source_items_count == 2
+    assert created_run.depth_score.extracted_signals_count == (extracted_signal_count or 0)
     assert len(source_items) == 2
     assert {item.provider_name for item in source_items} == {"google_books"}
     assert {item.query_text for item in source_items} == {"romance books"}
@@ -250,6 +466,8 @@ def test_research_service_handles_partial_provider_failure_and_persists_availabl
 
     assert run is not None
     assert run.status == ResearchRunStatus.COMPLETED
+    assert created_run.depth_score is not None
+    assert created_run.depth_score.provider_failures_count == 1
     assert (source_item_count or 0) == 2
     assert len(failures) == 1
     assert failures[0].provider_name == "open_library"
@@ -292,6 +510,8 @@ def test_research_service_completes_without_evidence_and_does_not_materialize_sy
 
     assert run is not None
     assert run.status == ResearchRunStatus.COMPLETED_NO_EVIDENCE
+    assert created_run.depth_score is not None
+    assert created_run.depth_score.score == 0.0
     assert run.error_message == "No persisted source evidence was collected from the configured providers."
     assert (source_item_count or 0) == 0
     assert (extracted_signal_count or 0) == 0
@@ -323,6 +543,8 @@ def test_research_service_marks_partial_failure_only_run_as_completed_without_ev
 
     assert run is not None
     assert run.status == ResearchRunStatus.COMPLETED_NO_EVIDENCE
+    assert created_run.depth_score is not None
+    assert created_run.depth_score.score == 0.0
     assert run.error_message == "No persisted source evidence was collected from the configured providers."
     assert len(failures) == 1
     assert failures[0].provider_name == "google_books"
@@ -388,6 +610,180 @@ def test_research_service_marks_run_failed_when_provider_registry_raises(
 
     with session_factory() as session:
         runs = list(session.scalars(select(ResearchRun).order_by(ResearchRun.created_at.desc())))
-        assert runs
-        assert runs[0].status == ResearchRunStatus.FAILED
-        assert runs[0].error_message == "provider registry crashed"
+    assert runs
+    assert runs[0].status == ResearchRunStatus.FAILED
+    assert runs[0].error_message == "provider registry crashed"
+
+
+def test_research_service_depth_score_penalizes_provider_failures(
+    session_factory,
+    workspace: Path,
+    current_user: CurrentUser,
+) -> None:
+    clean_service = ResearchService(
+        session_factory,
+        export_storage_path=str(workspace / "exports"),
+        provider_registry=FakeProviderRegistry(make_batch()),
+    )
+    degraded_service = ResearchService(
+        session_factory,
+        export_storage_path=str(workspace / "exports"),
+        provider_registry=FakeProviderRegistry(make_batch(include_failure=True)),
+    )
+
+    clean_run = clean_service.create_run(
+        current_user=current_user,
+        payload=CreateResearchRunRequest(seed_niche="romance", config={"max_candidates": 20, "top_k": 5}),
+    )
+    degraded_run = degraded_service.create_run(
+        current_user=current_user,
+        payload=CreateResearchRunRequest(seed_niche="romance", config={"max_candidates": 20, "top_k": 5}),
+    )
+
+    assert clean_run.depth_score is not None
+    assert degraded_run.depth_score is not None
+    assert clean_run.depth_score.score > degraded_run.depth_score.score
+    assert degraded_run.depth_score.provider_failures_count == 1
+    assert degraded_run.depth_score.breakdown.failure_adjustment > 0.0
+
+
+def test_research_service_suppresses_generic_and_false_positive_self_help_outputs(
+    session_factory,
+    workspace: Path,
+    current_user: CurrentUser,
+) -> None:
+    service = ResearchService(
+        session_factory,
+        export_storage_path=str(workspace / "exports"),
+        provider_registry=FakeProviderRegistry(make_self_help_quality_batch()),
+    )
+
+    created_run = service.create_run(
+        current_user=current_user,
+        payload=CreateResearchRunRequest(seed_niche="self-help", config={"max_candidates": 20, "top_k": 10}),
+    )
+
+    with session_factory() as session:
+        keywords = list(
+            session.scalars(select(KeywordCandidate).where(KeywordCandidate.run_id == created_run.id).order_by(KeywordCandidate.keyword_text))
+        )
+        opportunities = list(
+            session.scalars(select(Opportunity).where(Opportunity.run_id == created_run.id).order_by(Opportunity.title))
+        )
+
+    keyword_texts = {keyword.keyword_text for keyword in keywords}
+    opportunity_titles = {opportunity.title.lower() for opportunity in opportunities}
+
+    assert "god help the child" not in keyword_texts
+    assert "self help" not in keyword_texts
+    assert "self help books" not in keyword_texts
+    assert "greatest self help book" not in keyword_texts
+    assert "anxiety journal for young adults" in keyword_texts
+    assert any(keyword in keyword_texts for keyword in {"burnout workbook for busy professionals", "burnout recovery workbook for busy professionals"})
+    assert any(
+        keyword in keyword_texts
+        for keyword in {"self confidence workbook", "self esteem workbook", "confidence workbook"}
+    )
+    assert len(opportunity_titles) == len(opportunities)
+    assert "god help the child" not in opportunity_titles
+    assert "self help" not in opportunity_titles
+    assert len(opportunity_titles) >= 3
+
+
+def test_research_service_filters_observed_live_self_help_failure_pattern(
+    session_factory,
+    workspace: Path,
+    current_user: CurrentUser,
+) -> None:
+    service = ResearchService(
+        session_factory,
+        export_storage_path=str(workspace / "exports"),
+        provider_registry=FakeProviderRegistry(make_self_help_live_failure_like_batch()),
+    )
+
+    created_run = service.create_run(
+        current_user=current_user,
+        payload=CreateResearchRunRequest(seed_niche="self-help", config={"max_candidates": 20, "top_k": 10}),
+    )
+
+    with session_factory() as session:
+        keywords = list(
+            session.scalars(select(KeywordCandidate).where(KeywordCandidate.run_id == created_run.id).order_by(KeywordCandidate.keyword_text))
+        )
+        opportunities = list(
+            session.scalars(select(Opportunity).where(Opportunity.run_id == created_run.id).order_by(Opportunity.title))
+        )
+
+    keyword_texts = {keyword.keyword_text for keyword in keywords}
+    opportunity_titles = {opportunity.title.lower() for opportunity in opportunities}
+
+    assert "the self help book" not in keyword_texts
+    assert "the self help compulsion" not in keyword_texts
+    assert "god help the child" not in keyword_texts
+    assert "greatest self help book" not in keyword_texts
+    assert "self help" not in keyword_texts
+    assert "self help books" not in keyword_texts
+    assert "ten days to self esteem" not in keyword_texts
+    assert "anxiety journal for young adults" in keyword_texts
+    assert any(keyword in keyword_texts for keyword in {"burnout workbook for busy professionals", "burnout recovery workbook for busy professionals"})
+    assert any(
+        keyword in keyword_texts
+        for keyword in {"self confidence workbook", "self esteem workbook", "confidence workbook"}
+    )
+    assert "busy professionals" not in keyword_texts
+
+    assert "the self help book" not in opportunity_titles
+    assert "the self help compulsion" not in opportunity_titles
+    assert "god help the child" not in opportunity_titles
+    assert "greatest self help book" not in opportunity_titles
+    assert "self help" not in opportunity_titles
+    assert "busy professionals" not in opportunity_titles
+    assert len(opportunity_titles) >= 3
+
+
+def test_research_service_materializes_multiple_distinct_romance_micro_niches(
+    session_factory,
+    workspace: Path,
+    current_user: CurrentUser,
+) -> None:
+    service = ResearchService(
+        session_factory,
+        export_storage_path=str(workspace / "exports"),
+        provider_registry=FakeProviderRegistry(make_rich_romance_batch()),
+    )
+
+    created_run = service.create_run(
+        current_user=current_user,
+        payload=CreateResearchRunRequest(seed_niche="romance", config={"max_candidates": 20, "top_k": 10}),
+    )
+
+    with session_factory() as session:
+        keywords = list(
+            session.scalars(select(KeywordCandidate).where(KeywordCandidate.run_id == created_run.id).order_by(KeywordCandidate.keyword_text))
+        )
+        opportunities = list(
+            session.scalars(select(Opportunity).where(Opportunity.run_id == created_run.id).order_by(Opportunity.title))
+        )
+        hypotheses = list(
+            session.scalars(select(NicheHypothesis).where(NicheHypothesis.run_id == created_run.id).order_by(NicheHypothesis.hypothesis_label))
+        )
+
+    keyword_texts = {keyword.keyword_text for keyword in keywords}
+    opportunity_titles = {opportunity.title.lower() for opportunity in opportunities}
+    hypothesis_labels = {hypothesis.hypothesis_label for hypothesis in hypotheses}
+
+    assert 4 <= len(hypotheses) <= 8
+    assert len(keyword_texts) == len(keywords)
+    assert len(opportunity_titles) == len(opportunities)
+    assert "friends to lovers small town romance" in hypothesis_labels
+    assert "humorous small town romance" in hypothesis_labels
+    assert "opposites attract contemporary romance" in hypothesis_labels
+    assert "young adults paranormal romance" in hypothesis_labels or "sweet paranormal romance" in hypothesis_labels
+    assert keyword_texts == hypothesis_labels
+    assert "friends to lovers small town romance" in keyword_texts
+    assert "humorous small town romance" in keyword_texts
+    assert "opposites attract contemporary romance" in keyword_texts
+    assert "young adults paranormal romance" in keyword_texts or "sweet paranormal romance" in keyword_texts
+    assert "friends to lovers small town romance" in opportunity_titles
+    assert "humorous small town romance" in opportunity_titles
+    assert "opposites attract contemporary romance" in opportunity_titles
