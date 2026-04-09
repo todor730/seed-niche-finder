@@ -5,6 +5,16 @@ cd /d "%~dp0"
 
 set "API_BASE=http://127.0.0.1:8000"
 set "START_SCRIPT=%~dp0start_api.bat"
+set "DIAG_SCRIPT=%~dp0inspect_hypotheses_run.py"
+set "DEFAULT_PYTHON=C:\Users\Todor\AppData\Local\Programs\Python\Python314\python.exe"
+
+if exist "%DEFAULT_PYTHON%" (
+    set "PYTHON_CMD=%DEFAULT_PYTHON%"
+ ) else if exist "%~dp0.venv\Scripts\python.exe" (
+    set "PYTHON_CMD=%~dp0.venv\Scripts\python.exe"
+) else (
+    set "PYTHON_CMD=python"
+)
 
 set /p SEED_NICHE=Enter niche: 
 
@@ -23,12 +33,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ErrorActionPreference = 'Stop';" ^
   "$apiBase = '%API_BASE%';" ^
   "$startScript = '%START_SCRIPT%';" ^
+  "$diagScript = '%DIAG_SCRIPT%';" ^
+  "$pythonCmd = '%PYTHON_CMD%';" ^
   "$seedNiche = '%SEED_NICHE%';" ^
   "function Test-ApiHealth { try { Invoke-RestMethod -Method Get -Uri ($apiBase + '/api/v1/health') -TimeoutSec 3 | Out-Null; return $true } catch { return $false } }" ^
   "function Format-Number([object]$value) { if ($null -eq $value -or $value -eq '') { return 'n/a' } return [string]$value }" ^
   "if (-not (Test-ApiHealth)) {" ^
   "  Write-Host 'API is not running. Starting it now...';" ^
-  "  Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', ('\"' + $startScript + '\"') -WorkingDirectory (Split-Path -Parent $startScript) -WindowStyle Minimized | Out-Null;" ^
+  "  if (Test-Path $startScript) {" ^
+  "    Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', ('\"' + $startScript + '\"') -WorkingDirectory (Split-Path -Parent $startScript) -WindowStyle Minimized | Out-Null;" ^
+  "  } else {" ^
+  "    Start-Process -FilePath $pythonCmd -ArgumentList '-m','uvicorn','app.main:app','--host','127.0.0.1','--port','8000' -WorkingDirectory (Split-Path -Parent $diagScript) -WindowStyle Minimized | Out-Null;" ^
+  "  }" ^
   "  $started = $false;" ^
   "  for ($i = 0; $i -lt 20; $i++) { Start-Sleep -Seconds 1; if (Test-ApiHealth) { $started = $true; break } }" ^
   "  if (-not $started) { throw 'API did not start in time.' }" ^
@@ -42,11 +58,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$opportunities = (Invoke-RestMethod -Method Get -Uri ($apiBase + '/api/v1/research-runs/' + $runId + '/opportunities')).data;" ^
   "$createdExport = $null;" ^
   "$exports = $null;" ^
+  "$diagLines = @();" ^
   "try {" ^
   "  $exportBody = @{ format = 'json'; scope = 'full_run' } | ConvertTo-Json -Depth 3;" ^
   "  $createdExport = (Invoke-RestMethod -Method Post -Uri ($apiBase + '/api/v1/research-runs/' + $runId + '/exports') -ContentType 'application/json' -Body $exportBody).data;" ^
   "  $exports = (Invoke-RestMethod -Method Get -Uri ($apiBase + '/api/v1/research-runs/' + $runId + '/exports')).data;" ^
   "} catch { Write-Host ('Export step skipped: ' + $_.Exception.Message) }" ^
+  "if (Test-Path $diagScript) {" ^
+  "  try { $diagLines = & $pythonCmd $diagScript $runId 2>&1 } catch { $diagLines = @('diagnostics failed: ' + $_.Exception.Message) }" ^
+  "}" ^
   "Write-Host '';" ^
   "Write-Host ('Run ID: ' + $runId);" ^
   "Write-Host ('Status: ' + $runDetails.status);" ^
@@ -70,7 +90,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "Write-Host '';" ^
   "Write-Host 'Export:';" ^
   "if ($createdExport) { Write-Host ('  created: ' + $createdExport.id + ' [' + $createdExport.status + ']'); if ($createdExport.file_name) { Write-Host ('  file: ' + $createdExport.file_name) } } else { Write-Host '  (not created)' }" ^
-  "if ($exports) { Write-Host ('  total exports for run: ' + @($exports).Count) }"
+  "if ($exports) { Write-Host ('  total exports for run: ' + @($exports).Count) }" ^
+  "Write-Host '';" ^
+  "Write-Host 'Hypothesis Diagnostics:';" ^
+  "if (-not $diagLines -or @($diagLines).Count -eq 0) { Write-Host '  (not available)' } else { foreach ($line in $diagLines) { Write-Host ('  ' + $line) } }"
 
 if errorlevel 1 (
     echo.

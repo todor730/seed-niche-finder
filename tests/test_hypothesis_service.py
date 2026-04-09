@@ -236,6 +236,39 @@ def test_hypothesis_service_branches_rich_romance_input_without_near_duplicate_s
     assert all("romance" in label for label in labels)
 
 
+def test_hypothesis_service_exposes_anchor_diagnostics_for_branch_analysis(session_factory) -> None:
+    clustering_service = ClusteringService()
+    hypothesis_service = NicheHypothesisService()
+
+    with session_factory() as session:
+        run = _make_run(session, seed_niche="romance")
+        source_item_1 = _make_source_item(session, run_id=run.id, provider_name="google_books", dedupe_key="dx1", title="Friends to Lovers Small Town Romance")
+        source_item_2 = _make_source_item(session, run_id=run.id, provider_name="open_library", dedupe_key="dx2", title="Humorous Small Town Romance")
+        source_item_3 = _make_source_item(session, run_id=run.id, provider_name="google_books", dedupe_key="dx3", title="Opposites Attract Contemporary Romance")
+
+        extracted_signals = [
+            _make_signal(session, run_id=run.id, source_item_id=source_item_1.id, signal_type="subgenre", signal_value="Small Town Romance", normalized_value="small town romance", confidence=0.95),
+            _make_signal(session, run_id=run.id, source_item_id=source_item_1.id, signal_type="trope", signal_value="Friends to Lovers", normalized_value="friends to lovers", confidence=0.92),
+            _make_signal(session, run_id=run.id, source_item_id=source_item_2.id, signal_type="subgenre", signal_value="Small Town Romance", normalized_value="small town romance", confidence=0.90),
+            _make_signal(session, run_id=run.id, source_item_id=source_item_2.id, signal_type="tone", signal_value="Humorous", normalized_value="humorous", confidence=0.82),
+            _make_signal(session, run_id=run.id, source_item_id=source_item_3.id, signal_type="subgenre", signal_value="Contemporary Romance", normalized_value="contemporary romance", confidence=0.94),
+            _make_signal(session, run_id=run.id, source_item_id=source_item_3.id, signal_type="trope", signal_value="Opposites Attract", normalized_value="opposites attract", confidence=0.88),
+        ]
+
+        clustering_service.cluster_and_persist(session=session, extracted_signals=extracted_signals)
+        persisted = hypothesis_service.generate_and_persist(session=session, run_id=run.id)
+        diagnostics = hypothesis_service.diagnose_run(session=session, run_id=run.id)
+
+    assert diagnostics.persisted_hypothesis_count == len(persisted)
+    assert diagnostics.fiction_anchors
+    small_town = next(anchor for anchor in diagnostics.fiction_anchors if anchor.anchor_label == "small town romance")
+    assert small_town.raw_branch_count >= small_town.post_dedupe_branch_count >= 1
+    assert "trope" in small_town.candidate_components_by_type
+    assert any(branch.label == "friends to lovers small town romance" for branch in small_town.raw_branches)
+    assert any(branch.label == "humorous small town romance" for branch in small_town.post_dedupe_branches)
+    assert all(branch.reject_reason_code is None for branch in small_town.post_dedupe_branches)
+
+
 def test_hypothesis_service_builds_nonfiction_problem_solution_hypothesis(session_factory) -> None:
     clustering_service = ClusteringService()
     hypothesis_service = NicheHypothesisService()

@@ -77,6 +77,41 @@ class HypothesisBranch:
     branch_score: float
 
 
+@dataclass(frozen=True, slots=True)
+class BranchDiagnostic:
+    """Debug representation of one assembled branch."""
+
+    label: str
+    component_signature: tuple[tuple[str, str], ...]
+    branch_score: float
+    selected_components: dict[str, str]
+    reject_reason_code: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class AnchorDiagnostic:
+    """Debug view for one considered anchor."""
+
+    anchor_signal_type: str
+    anchor_label: str
+    candidate_components_by_type: dict[str, list[dict[str, object]]]
+    raw_branch_count: int
+    post_dedupe_branch_count: int
+    raw_branches: tuple[BranchDiagnostic, ...]
+    post_dedupe_branches: tuple[BranchDiagnostic, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RunHypothesisDiagnostic:
+    """Debug summary for one run's hypothesis assembly stage."""
+
+    run_id: UUID
+    fiction_anchors: tuple[AnchorDiagnostic, ...]
+    nonfiction_anchors: tuple[AnchorDiagnostic, ...]
+    persisted_hypothesis_count: int
+    persisted_hypothesis_labels: tuple[str, ...]
+
+
 class NicheHypothesisService:
     """Build coherent, evidence-backed niche hypotheses from clusters."""
 
@@ -113,6 +148,44 @@ class NicheHypothesisService:
             },
         )
         return hypotheses
+
+    def diagnose_run(
+        self,
+        *,
+        session: Session,
+        run_id: UUID,
+    ) -> RunHypothesisDiagnostic:
+        """Return explainable branch diagnostics for one persisted run."""
+        cluster_contexts = self._load_cluster_contexts(session=session, run_id=run_id)
+        contexts_by_type: dict[str, list[ClusterContext]] = defaultdict(list)
+        for context in cluster_contexts.values():
+            contexts_by_type[context.cluster.signal_type].append(context)
+
+        fiction_anchors: list[AnchorDiagnostic] = []
+        nonfiction_anchors: list[AnchorDiagnostic] = []
+        for primary_type in _PRIMARY_SIGNAL_TYPES:
+            for anchor in contexts_by_type.get(primary_type, []):
+                candidate_components = self._select_related_components(anchor=anchor, contexts_by_type=contexts_by_type)
+                diagnostic = self._diagnose_anchor(anchor=anchor, candidate_components=candidate_components)
+                if primary_type == "subgenre":
+                    fiction_anchors.append(diagnostic)
+                else:
+                    nonfiction_anchors.append(diagnostic)
+
+        persisted_hypotheses = list(
+            session.scalars(
+                select(NicheHypothesis)
+                .where(NicheHypothesis.run_id == run_id)
+                .order_by(NicheHypothesis.rank_position.asc().nullslast(), NicheHypothesis.hypothesis_label.asc())
+            )
+        )
+        return RunHypothesisDiagnostic(
+            run_id=run_id,
+            fiction_anchors=tuple(fiction_anchors),
+            nonfiction_anchors=tuple(nonfiction_anchors),
+            persisted_hypothesis_count=len(persisted_hypotheses),
+            persisted_hypothesis_labels=tuple(hypothesis.hypothesis_label for hypothesis in persisted_hypotheses),
+        )
 
     def _load_cluster_contexts(
         self,
@@ -340,49 +413,8 @@ class NicheHypothesisService:
             if current is None or branch.branch_score > current.branch_score:
                 branch_by_signature[component_signature] = branch
 
-        trope_candidates = candidate_components.get("trope", [])
-        tone_candidates = candidate_components.get("tone", [])
-        setting_candidates = candidate_components.get("setting", [])
-        audience_candidates = candidate_components.get("audience", [])
-        promise_candidates = candidate_components.get("promise", [])
-        relationship_candidates = candidate_components.get("relationship_dynamic", [])
-
-        preferred_audience = audience_candidates[:1]
-        preferred_promise = promise_candidates[:1]
-        preferred_relationship = relationship_candidates[:1]
-
-        for trope in trope_candidates:
-            selected = {"trope": trope}
-            if preferred_audience:
-                selected["audience"] = preferred_audience[0]
-            if preferred_promise:
-                selected["promise"] = preferred_promise[0]
-            if preferred_relationship:
-                selected["relationship_dynamic"] = preferred_relationship[0]
-            add_branch(selected)
-
-            for tone in tone_candidates[:1]:
-                add_branch({**selected, "tone": tone})
-
-        for tone in tone_candidates:
-            selected = {"tone": tone}
-            if preferred_audience:
-                selected["audience"] = preferred_audience[0]
-            if preferred_promise:
-                selected["promise"] = preferred_promise[0]
-            add_branch(selected)
-
-        for setting in setting_candidates:
-            selected = {"setting": setting}
-            if preferred_audience:
-                selected["audience"] = preferred_audience[0]
-            add_branch(selected)
-
-            if trope_candidates:
-                add_branch({"trope": trope_candidates[0], "setting": setting, **selected})
-
-        if preferred_audience and self._is_specific_fiction_audience(preferred_audience[0].context.cluster.canonical_label):
-            add_branch({"audience": preferred_audience[0]})
+        for selected_components in self._raw_fiction_branch_specs(candidate_components):
+            add_branch(selected_components)
 
         return sorted(
             branch_by_signature.values(),
@@ -412,6 +444,57 @@ class NicheHypothesisService:
                 branch_score=self._branch_score(anchor=anchor, selected_components=selected_components),
             )
         ]
+
+    def _raw_fiction_branch_specs(
+        self,
+        candidate_components: dict[str, list[ComponentCandidate]],
+    ) -> list[dict[str, ComponentCandidate]]:
+        raw_specs: list[dict[str, ComponentCandidate]] = []
+        trope_candidates = candidate_components.get("trope", [])
+        tone_candidates = candidate_components.get("tone", [])
+        setting_candidates = candidate_components.get("setting", [])
+        audience_candidates = candidate_components.get("audience", [])
+        promise_candidates = candidate_components.get("promise", [])
+        relationship_candidates = candidate_components.get("relationship_dynamic", [])
+
+        preferred_audience = audience_candidates[:1]
+        preferred_promise = promise_candidates[:1]
+        preferred_relationship = relationship_candidates[:1]
+
+        for trope in trope_candidates:
+            selected = {"trope": trope}
+            if preferred_audience:
+                selected["audience"] = preferred_audience[0]
+            if preferred_promise:
+                selected["promise"] = preferred_promise[0]
+            if preferred_relationship:
+                selected["relationship_dynamic"] = preferred_relationship[0]
+            raw_specs.append(selected)
+
+            for tone in tone_candidates[:1]:
+                raw_specs.append({**selected, "tone": tone})
+
+        for tone in tone_candidates:
+            selected = {"tone": tone}
+            if preferred_audience:
+                selected["audience"] = preferred_audience[0]
+            if preferred_promise:
+                selected["promise"] = preferred_promise[0]
+            raw_specs.append(selected)
+
+        for setting in setting_candidates:
+            selected = {"setting": setting}
+            if preferred_audience:
+                selected["audience"] = preferred_audience[0]
+            raw_specs.append(selected)
+
+            if trope_candidates:
+                raw_specs.append({"trope": trope_candidates[0], "setting": setting, **selected})
+
+        if preferred_audience and self._is_specific_fiction_audience(preferred_audience[0].context.cluster.canonical_label):
+            raw_specs.append({"audience": preferred_audience[0]})
+
+        return raw_specs
 
     def _build_fiction_label(
         self,
@@ -606,6 +689,94 @@ class NicheHypothesisService:
                 if item.id in candidate.shared_source_item_ids:
                     supporting_items[item.id] = item
         return sorted(supporting_items.values(), key=lambda item: (item.provider_name, item.title.lower()))
+
+    def _diagnose_anchor(
+        self,
+        *,
+        anchor: ClusterContext,
+        candidate_components: dict[str, list[ComponentCandidate]],
+    ) -> AnchorDiagnostic:
+        if anchor.cluster.signal_type == "subgenre":
+            raw_specs = self._raw_fiction_branch_specs(candidate_components)
+            deduped_branches = self._build_fiction_branches(anchor=anchor, candidate_components=candidate_components)
+        else:
+            branch_specs = []
+            if candidate_components.get("solution_angle"):
+                selected: dict[str, ComponentCandidate] = {"solution_angle": candidate_components["solution_angle"][0]}
+                if candidate_components.get("audience"):
+                    selected["audience"] = candidate_components["audience"][0]
+                if candidate_components.get("promise"):
+                    selected["promise"] = candidate_components["promise"][0]
+                branch_specs.append(selected)
+            raw_specs = branch_specs
+            deduped_branches = self._build_nonfiction_branches(anchor=anchor, candidate_components=candidate_components)
+
+        raw_branches = tuple(self._branch_diagnostic(anchor=anchor, selected_components=selected) for selected in raw_specs)
+        final_branches = tuple(
+            BranchDiagnostic(
+                label=branch.label,
+                component_signature=branch.component_signature,
+                branch_score=branch.branch_score,
+                selected_components={
+                    signal_type: candidate.context.cluster.canonical_label
+                    for signal_type, candidate in branch.selected_components.items()
+                },
+                reject_reason_code=self._reject_hypothesis(
+                    anchor=anchor,
+                    selected_components=branch.selected_components,
+                    label=branch.label,
+                ),
+            )
+            for branch in deduped_branches
+        )
+
+        return AnchorDiagnostic(
+            anchor_signal_type=anchor.cluster.signal_type,
+            anchor_label=anchor.cluster.canonical_label,
+            candidate_components_by_type={
+                signal_type: [
+                    {
+                        "label": candidate.context.cluster.canonical_label,
+                        "cooccurrence_ratio": candidate.cooccurrence_ratio,
+                        "selection_score": candidate.selection_score,
+                        "item_count": candidate.context.cluster.item_count,
+                        "source_count": candidate.context.cluster.source_count,
+                    }
+                    for candidate in candidates
+                ]
+                for signal_type, candidates in candidate_components.items()
+            },
+            raw_branch_count=len(raw_branches),
+            post_dedupe_branch_count=len(final_branches),
+            raw_branches=raw_branches,
+            post_dedupe_branches=final_branches,
+        )
+
+    def _branch_diagnostic(
+        self,
+        *,
+        anchor: ClusterContext,
+        selected_components: dict[str, ComponentCandidate],
+    ) -> BranchDiagnostic:
+        label = (
+            self._build_fiction_label(anchor=anchor, selected_components=selected_components)
+            if anchor.cluster.signal_type == "subgenre"
+            else self._build_nonfiction_label(anchor=anchor, selected_components=selected_components)
+        )
+        return BranchDiagnostic(
+            label=label or "",
+            component_signature=self._component_signature(selected_components),
+            branch_score=self._branch_score(anchor=anchor, selected_components=selected_components),
+            selected_components={
+                signal_type: candidate.context.cluster.canonical_label
+                for signal_type, candidate in selected_components.items()
+            },
+            reject_reason_code=(
+                self._reject_hypothesis(anchor=anchor, selected_components=selected_components, label=label)
+                if label is not None
+                else "label_missing"
+            ),
+        )
 
     def _log_hypothesis_rejection(
         self,
