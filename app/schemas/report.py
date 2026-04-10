@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
@@ -10,6 +11,22 @@ from pydantic import Field, field_validator
 
 from app.schemas.common import SchemaModel
 from app.schemas.research import DepthScoreSnapshot
+
+
+class ReportWarningSeverity(StrEnum):
+    """Severity levels for structured run/report warnings."""
+
+    INFO = "info"
+    WARNING = "warning"
+
+
+class ReportWarning(SchemaModel):
+    """Structured, evidence-backed warning emitted at report level."""
+
+    code: str = Field(min_length=1)
+    severity: ReportWarningSeverity
+    message: str = Field(min_length=1)
+    evidence: dict[str, Any] = Field(default_factory=dict)
 
 
 class SummaryScoreBreakdown(SchemaModel):
@@ -138,4 +155,5 @@ class RunSummaryReport(SchemaModel):
     seed_niche: str = Field(min_length=1)
     generated_at: datetime
     depth_score: DepthScoreSnapshot
+    warnings: list[ReportWarning] = Field(default_factory=list)
     top_niche_opportunities: list[NicheOpportunitySummary] = Field(default_factory=list)

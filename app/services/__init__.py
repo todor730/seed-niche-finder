@@ -4,6 +4,7 @@ from app.services.clustering import ClusteringService
 from app.services.depth_score import DepthScoreService, calculate_depth_score
 from app.services.extraction import RuleBasedExtractionService
 from app.services.export_service import ExportService
+from app.services.html_report_service import HtmlReportService
 from app.services.hypotheses import NicheHypothesisService
 from app.services.keyword_service import KeywordService
 from app.services.marketplaces import BasePlaywrightMarketplaceAdapter, MarketplaceAdapterRegistry
@@ -17,6 +18,7 @@ __all__ = [
     "ClusteringService",
     "DepthScoreService",
     "ExportService",
+    "HtmlReportService",
     "HypothesisRankingService",
     "KeywordService",
     "MarketplaceAdapterRegistry",

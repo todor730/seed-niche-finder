@@ -15,6 +15,8 @@ from app.db.models import NicheHypothesis, ResearchRun, SignalCluster
 from app.schemas.report import (
     CompetitionDensitySnapshot,
     NicheOpportunitySummary,
+    ReportWarning,
+    ReportWarningSeverity,
     RunSummaryReport,
     SignalSummary,
     SourceAgreementSnapshot,
@@ -84,6 +86,7 @@ class SummaryService:
             self._build_hypothesis_summary(hypothesis=hypothesis, cluster_map=cluster_map)
             for hypothesis in ranked_hypotheses
         ]
+        depth_score = to_depth_score_snapshot(self._depth_score_service.calculate_for_run(session=session, run=run))
 
         logger.info(
             "Run summary report built.",
@@ -97,12 +100,15 @@ class SummaryService:
             run_id=run.id,
             seed_niche=run.seed_niche,
             generated_at=datetime.now(UTC),
-            depth_score=to_depth_score_snapshot(self._depth_score_service.calculate_for_run(session=session, run=run)),
+            depth_score=depth_score,
+            warnings=self._build_run_warnings_from_depth(run=run, summaries=summaries, depth_score=depth_score),
             top_niche_opportunities=summaries,
         )
 
     def build_export_rows(self, *, report: RunSummaryReport) -> list[dict[str, object]]:
         """Flatten report summaries into row-oriented export records."""
+        warning_codes = "; ".join(item.code for item in report.warnings)
+        warning_messages = " | ".join(item.message for item in report.warnings)
         rows: list[dict[str, object]] = []
         for item in report.top_niche_opportunities:
             rows.append(
@@ -110,6 +116,8 @@ class SummaryService:
                     "run_id": str(report.run_id),
                     "seed_niche": report.seed_niche,
                     "generated_at": report.generated_at.isoformat(),
+                    "run_warning_codes": warning_codes,
+                    "run_warning_messages": warning_messages,
                     "rank_position": item.rank_position,
                     "niche_label": item.niche_label,
                     "audience": item.audience or "",
@@ -135,6 +143,114 @@ class SummaryService:
                 }
             )
         return rows
+
+    def _build_run_warnings_from_depth(
+        self,
+        *,
+        run: ResearchRun,
+        summaries: list[NicheOpportunitySummary],
+        depth_score: DepthScoreSnapshot,
+    ) -> list[ReportWarning]:
+        warnings: list[ReportWarning] = []
+        seen_codes: set[str] = set()
+
+        def add_warning(code: str, severity: ReportWarningSeverity, message: str, **evidence: Any) -> None:
+            if code in seen_codes:
+                return
+            seen_codes.add(code)
+            warnings.append(
+                ReportWarning(
+                    code=code,
+                    severity=severity,
+                    message=message,
+                    evidence={key: value for key, value in evidence.items() if value is not None},
+                )
+            )
+
+        if run.status.value == "completed_no_evidence":
+            add_warning(
+                "no_evidence_materialized",
+                ReportWarningSeverity.WARNING,
+                "No evidence-backed opportunities were materialized for this run.",
+                status=run.status.value,
+                source_items_count=depth_score.source_items_count,
+                niche_hypotheses_count=depth_score.niche_hypotheses_count,
+            )
+
+        if depth_score.provider_failures_count > 0:
+            add_warning(
+                "provider_failures_recorded",
+                ReportWarningSeverity.WARNING,
+                f"{depth_score.provider_failures_count} provider failures were recorded during collection.",
+                provider_failures_count=depth_score.provider_failures_count,
+                attempted_queries_count=depth_score.attempted_queries_count,
+            )
+
+        if depth_score.source_items_count > 0 and depth_score.evidence_provider_count <= 1:
+            add_warning(
+                "source_concentration",
+                ReportWarningSeverity.WARNING,
+                "Most of the evidence comes from one source, so the niche may be less stable than it looks.",
+                evidence_provider_count=depth_score.evidence_provider_count,
+                source_items_count=depth_score.source_items_count,
+            )
+
+        if any(item.competition_density.fallback_used for item in summaries):
+            fallback_count = sum(1 for item in summaries if item.competition_density.fallback_used)
+            add_warning(
+                "competition_proxy_used",
+                ReportWarningSeverity.INFO,
+                "Some competition readings rely on fallback proxy evidence, so the crowding read is cautious rather than complete.",
+                fallback_summary_count=fallback_count,
+            )
+
+        if any("weak_audience_definition" in item.risk_flags for item in summaries):
+            weak_count = sum(1 for item in summaries if "weak_audience_definition" in item.risk_flags)
+            add_warning(
+                "weak_audience_definition",
+                ReportWarningSeverity.WARNING,
+                "Audience definition is weak, so messaging may drift too broad.",
+                affected_summary_count=weak_count,
+            )
+
+        if any("generic_positioning" in item.risk_flags for item in summaries):
+            generic_count = sum(1 for item in summaries if "generic_positioning" in item.risk_flags)
+            add_warning(
+                "generic_positioning",
+                ReportWarningSeverity.WARNING,
+                "Some surfaced niches still read generically, which can weaken click-through and positioning clarity.",
+                affected_summary_count=generic_count,
+            )
+
+        if len(summaries) > 1:
+            labels = {item.niche_label for item in summaries}
+            trope_counts: dict[str, int] = {}
+            for item in summaries:
+                for signal in item.key_signals:
+                    if signal.signal_type != "trope":
+                        continue
+                    trope_counts[signal.label] = trope_counts.get(signal.label, 0) + 1
+            if len(labels) != len(summaries):
+                add_warning(
+                    "visible_label_overlap",
+                    ReportWarningSeverity.WARNING,
+                    "Some surfaced opportunities still collapse to the same visible label.",
+                    surfaced_label_count=len(labels),
+                    opportunity_count=len(summaries),
+                )
+            elif trope_counts:
+                top_trope, top_count = max(trope_counts.items(), key=lambda item: item[1])
+                if top_count >= max(2, len(summaries) - 1):
+                    add_warning(
+                        "trope_family_overlap",
+                        ReportWarningSeverity.INFO,
+                        f"Top results lean heavily on the same trope family: {top_trope}.",
+                        trope=top_trope,
+                        repeated_count=top_count,
+                        surfaced_count=len(summaries),
+                    )
+
+        return warnings
 
     def _load_cluster_map(
         self,

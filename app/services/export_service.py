@@ -137,6 +137,9 @@ class ExportService:
         summary_report = self._summary_service.build_run_summary_report(session=session, run_id=run.id)
         niche_summary_records = [item.model_dump(mode="json") for item in summary_report.top_niche_opportunities]
         niche_summary_rows = self._summary_service.build_export_rows(report=summary_report)
+        warning_records = [item.model_dump(mode="json") for item in summary_report.warnings]
+        warning_codes = "; ".join(item.code for item in summary_report.warnings)
+        warning_messages = " | ".join(item.message for item in summary_report.warnings)
 
         if export_scope == "keywords":
             return keyword_records
@@ -161,10 +164,13 @@ class ExportService:
                         "depth_niche_hypotheses_count": summary_report.depth_score.niche_hypotheses_count,
                         "depth_provider_failures_count": summary_report.depth_score.provider_failures_count,
                         "depth_evidence_provider_count": summary_report.depth_score.evidence_provider_count,
+                        "warning_codes": warning_codes,
+                        "warning_messages": warning_messages,
                         "insufficient_evidence": insufficient_evidence,
                         "note": note if insufficient_evidence else "",
                     }
                 ],
+                "warnings": warning_records,
                 "niche_summaries": niche_summary_rows,
                 "keywords": keyword_records,
                 "opportunities": opportunity_records,
@@ -179,6 +185,8 @@ class ExportService:
                         "generated_at": summary_report.generated_at.isoformat(),
                         "run_depth_score": summary_report.depth_score.score,
                         "run_query_success_rate": summary_report.depth_score.breakdown.query_success_rate,
+                        "run_warning_codes": warning_codes,
+                        "run_warning_messages": warning_messages,
                         "insufficient_evidence": True,
                         "note": note,
                     }
@@ -188,6 +196,8 @@ class ExportService:
                     **row,
                     "run_depth_score": summary_report.depth_score.score,
                     "run_query_success_rate": summary_report.depth_score.breakdown.query_success_rate,
+                    "run_warning_codes": warning_codes,
+                    "run_warning_messages": warning_messages,
                 }
                 for row in niche_summary_rows
             ]
@@ -198,6 +208,7 @@ class ExportService:
                 "status": run.status.value,
                 "generated_at": summary_report.generated_at.isoformat(),
                 "depth_score": summary_report.depth_score.model_dump(mode="json"),
+                "warnings": warning_records,
                 "insufficient_evidence": insufficient_evidence,
                 "notes": [note] if insufficient_evidence else [],
                 "niche_summaries": niche_summary_records,

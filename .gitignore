@@ -30,6 +30,7 @@ build/
 pip-wheel-metadata/
 
 artifacts/exports/
+artifacts/reports/
 artifacts/replay/
 *.db
 *.sqlite

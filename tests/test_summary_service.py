@@ -4,26 +4,36 @@ import json
 from pathlib import Path
 from uuid import UUID
 
+import pandas as pd
+from sqlalchemy import select
+
 from app.api.dependencies import CurrentUser
-from app.db.models import NicheScore
+from app.db.models import NicheScore, ResearchRun
 from app.schemas.export import CreateExportRequest
 from app.schemas.report import RunSummaryReport
 from app.schemas.research import CreateResearchRunRequest
 from app.services.export_service import ExportService
 from app.services.research_service import ResearchService
 from app.services.summary_service import SummaryService
-from tests.test_research_service_evidence import FakeProviderRegistry, make_batch
+from tests.test_research_service_evidence import FakeProviderRegistry, make_batch, make_empty_batch
 
 
-def _create_ranked_run(session_factory, workspace: Path, current_user: CurrentUser) -> UUID:
+def _create_ranked_run(
+    session_factory,
+    workspace: Path,
+    current_user: CurrentUser,
+    *,
+    provider_registry: FakeProviderRegistry | None = None,
+    seed_niche: str = "romance",
+) -> UUID:
     service = ResearchService(
         session_factory,
         export_storage_path=str(workspace / "exports"),
-        provider_registry=FakeProviderRegistry(make_batch()),
+        provider_registry=provider_registry or FakeProviderRegistry(make_batch()),
     )
     created_run = service.create_run(
         current_user=current_user,
-        payload=CreateResearchRunRequest(seed_niche="romance", config={"max_candidates": 20, "top_k": 5}),
+        payload=CreateResearchRunRequest(seed_niche=seed_niche, config={"max_candidates": 20, "top_k": 5}),
     )
     return UUID(str(created_run.id))
 
@@ -59,6 +69,52 @@ def test_summary_service_builds_decision_grade_report(
     assert top_summary.traceability["supporting_source_item_ids"]
 
 
+def test_summary_service_emits_structured_run_warnings(
+    session_factory,
+    workspace: Path,
+    current_user: CurrentUser,
+) -> None:
+    run_id = _create_ranked_run(
+        session_factory,
+        workspace,
+        current_user,
+        provider_registry=FakeProviderRegistry(make_batch(include_failure=True)),
+    )
+    summary_service = SummaryService()
+
+    with session_factory() as session:
+        report = summary_service.build_run_summary_report(session=session, run_id=run_id)
+
+    warning_codes = {item.code for item in report.warnings}
+    assert "source_concentration" in warning_codes
+    assert "provider_failures_recorded" in warning_codes
+    source_warning = next(item for item in report.warnings if item.code == "source_concentration")
+    assert source_warning.severity == "warning"
+    assert source_warning.evidence["evidence_provider_count"] == 1
+
+
+def test_summary_service_emits_honest_no_evidence_warning(
+    session_factory,
+    workspace: Path,
+    current_user: CurrentUser,
+) -> None:
+    run_id = _create_ranked_run(
+        session_factory,
+        workspace,
+        current_user,
+        provider_registry=FakeProviderRegistry(make_empty_batch(include_failure=True)),
+        seed_niche="self-help",
+    )
+    summary_service = SummaryService()
+
+    with session_factory() as session:
+        report = summary_service.build_run_summary_report(session=session, run_id=run_id)
+
+    warning_codes = {item.code for item in report.warnings}
+    assert "no_evidence_materialized" in warning_codes
+    assert "provider_failures_recorded" in warning_codes
+
+
 def test_summary_service_export_rows_are_flat_and_export_ready(
     session_factory,
     workspace: Path,
@@ -78,6 +134,8 @@ def test_summary_service_export_rows_are_flat_and_export_ready(
     assert isinstance(first_row["key_signals"], str)
     assert isinstance(first_row["why_it_may_work"], str)
     assert isinstance(first_row["risk_flags"], str)
+    assert "run_warning_codes" in first_row
+    assert "run_warning_messages" in first_row
 
 
 def test_full_run_json_export_includes_niche_summaries(
@@ -100,6 +158,8 @@ def test_full_run_json_export_includes_niche_summaries(
     assert exported_data
     assert exported_data[0]["seed_niche"] == "romance"
     assert exported_data[0]["depth_score"]["score"] > 0.0
+    assert exported_data[0]["warnings"]
+    assert any(item["code"] == "source_concentration" for item in exported_data[0]["warnings"])
     assert exported_data[0]["niche_summaries"]
     first_summary = exported_data[0]["niche_summaries"][0]
     assert "niche_label" in first_summary
@@ -137,6 +197,58 @@ def test_repeated_exports_create_distinct_immutable_artifacts(
     assert second_path.exists()
     assert first_path.read_text(encoding="utf-8")
     assert second_path.read_text(encoding="utf-8")
+
+
+def test_full_run_csv_export_carries_run_warning_summary_columns(
+    session_factory,
+    workspace: Path,
+    current_user: CurrentUser,
+) -> None:
+    run_id = _create_ranked_run(session_factory, workspace, current_user)
+    export_service = ExportService(session_factory, export_storage_path=str(workspace / "exports"))
+
+    export_resource = export_service.create_export(
+        current_user=current_user,
+        run_id=run_id,
+        payload=CreateExportRequest(format="csv", scope="full_run"),
+    )
+
+    export_path = Path(export_resource.storage_uri or "")
+    dataframe = pd.read_csv(export_path)
+
+    assert "run_warning_codes" in dataframe.columns
+    assert "run_warning_messages" in dataframe.columns
+    assert dataframe.loc[0, "run_warning_codes"]
+
+
+def test_full_run_xlsx_export_payload_includes_warning_sheet_and_overview_summary(
+    session_factory,
+    workspace: Path,
+    current_user: CurrentUser,
+) -> None:
+    run_id = _create_ranked_run(
+        session_factory,
+        workspace,
+        current_user,
+        provider_registry=FakeProviderRegistry(make_batch(include_failure=True)),
+    )
+    export_service = ExportService(session_factory, export_storage_path=str(workspace / "exports"))
+
+    with session_factory() as session:
+        run = session.scalar(select(ResearchRun).where(ResearchRun.id == run_id))
+        assert run is not None
+        payload = export_service._build_export_payload(
+            session=session,
+            run=run,
+            export_scope="full_run",
+            export_format="xlsx",
+        )
+
+    assert "run_overview" in payload
+    assert "warnings" in payload
+    assert payload["run_overview"][0]["warning_codes"]
+    assert payload["warnings"]
+    assert payload["warnings"][0]["code"]
 
 
 def test_summary_service_normalizes_legacy_string_limitations_without_character_splitting(
